@@ -1,0 +1,50 @@
+# Configuration file for the BitSpec-GCN project
+# Based on specification-doc.md
+
+model:
+  encoder:
+    input_dim: 7      # Based on the number of features from preprocessor.py
+    hidden_dim: 256
+    output_dim: 256
+    num_layers: 4
+    dropout: 0.2
+
+  decoder:
+    input_dim: 256    # Should match encoder.output_dim
+    hidden_dim: 512
+    output_bins: 1000 # Corresponds to m/z range 1-1000
+    num_layers: 4
+    # Quantization parameters are handled within the BitLinear layer itself
+
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  epochs: 100
+  weight_decay: 0.00001
+  gradient_clip: 1.0
+
+  # Learning rate scheduler settings
+  scheduler:
+    type: "CosineAnnealingWarmRestarts"
+    t_0: 10     # Number of iterations for the first restart
+    t_mult: 2   # A factor by which to increase T_i after a restart
+    eta_min: 0.00001 # Minimum learning rate
+
+data:
+  msp_path: "NIST17.MSP"
+  mol_dir: "mol_files"
+  # Directory to cache preprocessed graph data for faster loading
+  cache_dir: "cache"
+  # 80% train, 10% validation, 10% test split
+  split_ratios: [0.8, 0.1, 0.1]
+
+evaluation:
+  top_n_accuracy:
+    n: 10
+    tolerance: 1
+
+# General settings
+run:
+  device: "cuda"  # "cuda" or "cpu"
+  num_workers: 4  # Number of workers for DataLoader
+  save_dir: "results" # Directory to save models and plots
