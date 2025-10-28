@@ -1,0 +1,54 @@
+{
+    "name": "BitSpec Mass Spectrum Prediction",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "runArgs": [
+        "--gpus=all",
+        "--shm-size=16gb",
+        "--ipc=host"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-toolsai.jupyter",
+                "ms-azuretools.vscode-docker",
+                "eamodio.gitlens",
+                "gruntfuggly.todo-tree"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/bin/python3",
+                "python.linting.enabled": true,
+                "python.linting.pylintEnabled": false,
+                "python.linting.flake8Enabled": true,
+                "python.formatting.provider": "black",
+                "editor.formatOnSave": true,
+                "editor.rulers": [88],
+                "files.exclude": {
+                    "**/__pycache__": true,
+                    "**/*.pyc": true,
+                    "**/.pytest_cache": true
+                }
+            }
+        }
+    },
+    "mounts": [
+        "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+        "source=${localWorkspaceFolder}/data,target=/workspace/data,type=bind",
+        "source=${localWorkspaceFolder}/checkpoints,target=/workspace/checkpoints,type=bind"
+    ],
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "postCreateCommand": "pip3 install -e .",
+    "remoteUser": "devuser",
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installZsh": true,
+            "installOhMyZsh": true
+        }
+    }
+}

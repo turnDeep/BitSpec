@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# PyTorch
+*.pt
+*.pth
+*.ckpt
+!checkpoints/.gitkeep
+
+# Data files (keep structure but ignore large files)
+*.msp
+*.mol
+*.sdf
+data/processed/*.pkl
+data/processed/*.h5
+data/processed/*.hdf5
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+tensorboard/
+
+# Weights & Biases
+wandb/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Dev Container
+.devcontainer/.env
