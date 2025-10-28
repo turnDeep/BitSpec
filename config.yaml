@@ -1,0 +1,92 @@
+# config.yaml
+"""
+マススペクトル予測システムの設定ファイル
+"""
+
+# プロジェクト設定
+project:
+  name: "MS_Predictor"
+  description: "GCN-based Mass Spectrum Prediction"
+  version: "1.0.0"
+
+# データ設定
+data:
+  nist_msp_path: "data/NIST17.MSP"
+  mol_files_dir: "data/mol_files"
+  output_dir: "data/processed"
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  max_mz: 1000
+  mz_bin_size: 1.0
+  min_intensity: 0.001
+  
+# モデル設定
+model:
+  type: "GCN"  # GCN, GAT, GraphTransformer
+  hidden_dim: 256
+  num_layers: 5
+  dropout: 0.1
+  pooling: "attention"  # mean, max, attention
+  
+  # GCN固有の設定
+  gcn:
+    conv_type: "GCNConv"  # GCNConv, SAGEConv, GATConv
+    activation: "relu"
+    batch_norm: true
+    residual: true
+  
+  # 出力層の設定
+  output:
+    spectrum_dim: 1000  # max_mz / mz_bin_size
+    use_log_transform: true
+    
+# 訓練設定
+training:
+  batch_size: 32
+  num_epochs: 200
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler: "cosine"  # step, cosine, plateau
+  warmup_epochs: 10
+  gradient_clip: 1.0
+  
+  # 早期終了
+  early_stopping:
+    patience: 20
+    min_delta: 0.0001
+  
+  # チェックポイント
+  checkpoint:
+    save_every: 5
+    keep_best: 3
+    
+# GPU設定 (RTX 50シリーズ対応)
+gpu:
+  use_cuda: true
+  device_ids: [0]  # 使用するGPU ID
+  mixed_precision: true  # FP16混合精度訓練
+  compile: true  # torch.compile使用
+  compile_mode: "reduce-overhead"  # default, reduce-overhead, max-autotune
+  
+  # RTX 50シリーズ固有の設定
+  rtx50:
+    enable_compat: true  # rtx50-compat使用
+    force_sm90_emulation: false  # sm_90エミュレーション
+    
+# ロギング設定
+logging:
+  use_tensorboard: true
+  use_wandb: false
+  log_dir: "logs"
+  wandb_project: "ms-prediction"
+  log_every: 10
+  
+# 評価設定
+evaluation:
+  metrics:
+    - "cosine_similarity"
+    - "mse"
+    - "mae"
+    - "recall_at_k"
+  recall_k_values: [1, 5, 10, 20]
