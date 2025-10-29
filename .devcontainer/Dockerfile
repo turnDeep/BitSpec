@@ -1,7 +1,7 @@
 # Dockerfile for Mass Spectrum Prediction Dev Container
-# RTX 50シリーズ対応のCUDA 12.8環境
+# RTX 40/50シリーズ対応のCUDA 12.1環境
 
-FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 # 環境変数の設定
 ENV DEBIAN_FRONTEND=noninteractive
@@ -37,11 +37,8 @@ WORKDIR /workspace
 COPY requirements.txt /tmp/requirements.txt
 
 # PyTorchとその他の依存関係のインストール
-# RTX 50対応のためにnightly buildを使用
-RUN pip3 install --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/nightly/cu128 \
-    torch>=2.7.0.dev torchvision>=0.22.0.dev torchaudio>=2.7.0.dev || \
-    pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# CUDA 12.1対応の安定版を使用（PyG拡張機能の互換性のため）
+RUN pip3 install --no-cache-dir torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # RDKitのインストール（化学構造処理）
 RUN pip3 install --no-cache-dir rdkit
@@ -62,19 +59,11 @@ RUN pip3 install --no-cache-dir \
     ipython
 
 # PyTorch Geometricとその依存関係
-# ビルド済みホイールを使用してインストール (sm_120対応)
-# PIP_NO_BUILD_ISOLATION=1を使用してビルド時にtorchを利用可能にする
-RUN TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__.split('+')[0])") && \
-    CUDA_VERSION=$(python3 -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
-    echo "PyTorch version: ${TORCH_VERSION}, CUDA version: ${CUDA_VERSION}" && \
-    pip3 install --no-cache-dir torch-geometric && \
-    PIP_NO_BUILD_ISOLATION=1 pip3 install --no-cache-dir \
-    torch-scatter torch-sparse torch-cluster \
-    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html || \
-    (echo "Warning: Failed to install from PyG wheels, trying with alternative CUDA version..." && \
-     pip3 install --no-cache-dir torch-geometric && \
-     PIP_NO_BUILD_ISOLATION=1 pip3 install --no-cache-dir torch-scatter torch-sparse torch-cluster \
-     -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+cu121.html)
+# PyTorch 2.5.1とCUDA 12.1用の事前ビルド済みホイールを使用
+RUN pip3 install --no-cache-dir torch-geometric && \
+    pip3 install --no-cache-dir \
+    torch-scatter torch-sparse torch-cluster torch-spline-conv \
+    -f https://data.pyg.org/whl/torch-2.5.0+cu121.html
 
 # その他の化学計算ライブラリ
 RUN pip3 install --no-cache-dir \
