@@ -1,23 +1,22 @@
 # requirements.txt
 """
 RTX 50シリーズ(sm_120)対応の依存関係リスト
+PyTorch 2.7.0以降でBlackwellアーキテクチャ(sm_120)を公式サポート
 """
 
-# PyTorch (RTX 50対応のnightly build)
---extra-index-url https://download.pytorch.org/whl/nightly/cu128
-torch>=2.7.0.dev
-torchvision>=0.22.0.dev
-torchaudio>=2.7.0.dev
-
-# RTX 50シリーズ互換性パッチ
-rtx50-compat>=3.0.0
+# PyTorch (RTX 50対応の安定版 - CUDA 12.8)
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch>=2.7.0
+torchvision>=0.22.0
+torchaudio>=2.7.0
 
 # 化学構造処理
 rdkit>=2023.9.1
 mordred>=1.2.0
 mol2vec>=0.1
 
-# グラフニューラルネットワーク
+# グラフニューラルネットワーク (PyG公式ホイールリポジトリ)
+--find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html
 torch-geometric>=2.5.0
 torch-scatter>=2.1.2
 torch-sparse>=0.6.18
