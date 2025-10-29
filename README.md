@@ -36,23 +36,40 @@ pip install -e .
 
 ### 利用可能なコマンド
 
+Claude Code環境内では、以下のスラッシュコマンドが使用できます:
+
 - `/setup` - 開発環境のセットアップ
 - `/preprocess` - データの前処理
 - `/train` - モデルのトレーニング
 - `/predict` - 予測の実行
 - `/test` - テストの実行
 
-### 使用例
+### 使用方法
 
-```bash
-# Claude Codeを起動
-claude-code
+Claude Code環境を使用している場合は、直接スラッシュコマンドを実行できます:
 
-# コマンドを実行
+```
 /setup          # 環境をセットアップ
 /preprocess     # データを前処理
 /train          # モデルをトレーニング
 /predict        # 予測を実行
+```
+
+または、Pythonスクリプトを直接実行することもできます:
+
+```bash
+# 環境セットアップ
+pip install -r requirements.txt
+pip install -e .
+
+# データ前処理
+python scripts/preprocess_data.py --input data/raw/nist_data.msp --output data/processed
+
+# トレーニング
+python scripts/train.py --config config.yaml
+
+# 予測
+python scripts/predict.py --checkpoint checkpoints/best_model.pt --config config.yaml --smiles "CC(=O)OC1=CC=CC=C1C(=O)O"
 ```
 
 プロジェクト固有の質問や開発タスクについても、Claude Codeに直接質問できます。
