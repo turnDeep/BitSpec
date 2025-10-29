@@ -63,18 +63,20 @@ RUN pip3 install --no-cache-dir \
 
 # PyTorch Geometricとその依存関係
 # ビルド済みホイールを使用してインストール (sm_120対応)
-# PIP_NO_BUILD_ISOLATION=1を使用してビルド時にtorchを利用可能にする
+# --no-build-isolationを使用してビルド時にtorchを利用可能にする
 RUN TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__.split('+')[0])") && \
     CUDA_VERSION=$(python3 -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
     echo "PyTorch version: ${TORCH_VERSION}, CUDA version: ${CUDA_VERSION}" && \
     pip3 install --no-cache-dir torch-geometric && \
-    PIP_NO_BUILD_ISOLATION=1 pip3 install --no-cache-dir \
+    pip3 install --no-cache-dir ninja && \
+    pip3 install --no-build-isolation --no-cache-dir \
     torch-scatter torch-sparse torch-cluster \
     -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html || \
-    (echo "Warning: Failed to install from PyG wheels, trying with alternative CUDA version..." && \
-     pip3 install --no-cache-dir torch-geometric && \
-     PIP_NO_BUILD_ISOLATION=1 pip3 install --no-cache-dir torch-scatter torch-sparse torch-cluster \
-     -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+cu121.html)
+    (echo "Warning: Failed to install from PyG wheels with ${CUDA_VERSION}, trying with cu121..." && \
+     pip3 install --no-build-isolation --no-cache-dir torch-scatter torch-sparse torch-cluster \
+     -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+cu121.html) || \
+    (echo "Warning: Failed to install from PyG wheels, building from source..." && \
+     pip3 install --no-build-isolation --no-cache-dir torch-scatter torch-sparse torch-cluster)
 
 # その他の化学計算ライブラリ
 RUN pip3 install --no-cache-dir \
