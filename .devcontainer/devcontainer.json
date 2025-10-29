@@ -36,7 +36,6 @@
         }
     },
     "mounts": [
-        "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
         "source=${localWorkspaceFolder}/data,target=/workspace/data,type=bind",
         "source=${localWorkspaceFolder}/checkpoints,target=/workspace/checkpoints,type=bind"
     ],
