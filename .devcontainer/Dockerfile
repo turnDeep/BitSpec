@@ -62,11 +62,18 @@ RUN pip3 install --no-cache-dir \
     ipython
 
 # PyTorch Geometricとその依存関係
-RUN pip3 install --no-cache-dir \
-    torch-geometric \
-    torch-scatter \
-    torch-sparse \
-    torch-cluster
+# ビルド済みホイールを使用してインストール (sm_120対応)
+RUN TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__.split('+')[0])") && \
+    CUDA_VERSION=$(python3 -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
+    echo "PyTorch version: ${TORCH_VERSION}, CUDA version: ${CUDA_VERSION}" && \
+    pip3 install --no-cache-dir torch-geometric && \
+    pip3 install --no-cache-dir \
+    torch-scatter torch-sparse torch-cluster \
+    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html || \
+    (echo "Warning: Failed to install from PyG wheels, trying with alternative CUDA version..." && \
+     pip3 install --no-cache-dir torch-geometric && \
+     pip3 install --no-cache-dir torch-scatter torch-sparse torch-cluster \
+     -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+cu121.html)
 
 # その他の化学計算ライブラリ
 RUN pip3 install --no-cache-dir \
