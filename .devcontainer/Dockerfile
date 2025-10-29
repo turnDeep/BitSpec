@@ -37,11 +37,14 @@ WORKDIR /workspace
 COPY requirements.txt /tmp/requirements.txt
 
 # PyTorchとその他の依存関係のインストール
-# RTX 50対応のためにnightly buildを使用
+# RTX 50対応の安定版 PyTorch 2.7.0 (CUDA 12.8)
+# PyTorch Geometricのビルド済みホイールが利用可能なバージョンを使用
 RUN pip3 install --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/nightly/cu128 \
-    torch>=2.7.0.dev torchvision>=0.22.0.dev torchaudio>=2.7.0.dev || \
-    pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 || \
+    pip3 install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
+    torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0
 
 # RDKitのインストール（化学構造処理）
 RUN pip3 install --no-cache-dir rdkit
@@ -62,18 +65,11 @@ RUN pip3 install --no-cache-dir \
     ipython
 
 # PyTorch Geometricとその依存関係
-# ビルド済みホイールを使用してインストール (sm_120対応)
-RUN TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__.split('+')[0])") && \
-    CUDA_VERSION=$(python3 -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
-    echo "PyTorch version: ${TORCH_VERSION}, CUDA version: ${CUDA_VERSION}" && \
-    pip3 install --no-cache-dir torch-geometric && \
+# ビルド済みホイールを使用してインストール (PyTorch 2.7.0対応)
+RUN pip3 install --no-cache-dir torch-geometric && \
     pip3 install --no-cache-dir \
-    torch-scatter torch-sparse torch-cluster \
-    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html || \
-    (echo "Warning: Failed to install from PyG wheels, trying with alternative CUDA version..." && \
-     pip3 install --no-cache-dir torch-geometric && \
-     pip3 install --no-cache-dir torch-scatter torch-sparse torch-cluster \
-     -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+cu121.html)
+    torch-scatter torch-sparse torch-cluster torch-spline-conv \
+    -f https://data.pyg.org/whl/torch-2.7.0+cu121.html
 
 # その他の化学計算ライブラリ
 RUN pip3 install --no-cache-dir \
