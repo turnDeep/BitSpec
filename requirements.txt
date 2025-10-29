@@ -1,8 +1,6 @@
 # requirements.txt
-"""
-RTX 50シリーズ(sm_120)対応の依存関係リスト
-PyTorch 2.7.0以降でBlackwellアーキテクチャ(sm_120)を公式サポート
-"""
+# RTX 50シリーズ(sm_120)対応の依存関係リスト
+# PyTorch 2.7.0以降でBlackwellアーキテクチャ(sm_120)を公式サポート
 
 # PyTorch (RTX 50対応の安定版 - CUDA 12.8)
 --extra-index-url https://download.pytorch.org/whl/cu128
