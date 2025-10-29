@@ -1,7 +1,7 @@
 # Dockerfile for Mass Spectrum Prediction Dev Container
 # RTX 50シリーズ対応のCUDA 12.8環境
 
-FROM nvidia/cuda:12.8.0-cudnn9-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 # 環境変数の設定
 ENV DEBIAN_FRONTEND=noninteractive
