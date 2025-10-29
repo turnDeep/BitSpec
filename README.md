@@ -30,6 +30,33 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+## Claude Codeの使用
+
+このプロジェクトはClaude Codeに対応しています。Claude Codeを使用すると、AIアシスタントを使ってプロジェクトの開発や管理を効率化できます。
+
+### 利用可能なコマンド
+
+- `/setup` - 開発環境のセットアップ
+- `/preprocess` - データの前処理
+- `/train` - モデルのトレーニング
+- `/predict` - 予測の実行
+- `/test` - テストの実行
+
+### 使用例
+
+```bash
+# Claude Codeを起動
+claude-code
+
+# コマンドを実行
+/setup          # 環境をセットアップ
+/preprocess     # データを前処理
+/train          # モデルをトレーニング
+/predict        # 予測を実行
+```
+
+プロジェクト固有の質問や開発タスクについても、Claude Codeに直接質問できます。
+
 ## データの準備
 
 NIST MSP形式のデータを準備します:
