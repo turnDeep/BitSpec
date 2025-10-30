@@ -28,8 +28,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # python と pip のシンボリックリンクを作成
-RUN ln -s /usr/bin/python3 /usr/bin/python && \
-    ln -s /usr/bin/pip3 /usr/bin/pip
+# -f オプションで既存のファイルを上書き
+RUN ln -sf /usr/bin/python3 /usr/bin/python && \
+    ln -sf /usr/bin/pip3 /usr/bin/pip
 
 # pipのアップグレード
 RUN python3 -m pip install --upgrade pip setuptools wheel
