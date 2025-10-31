@@ -107,6 +107,10 @@ RUN pip3 install --no-cache-dir \
 RUN useradd -m -s /bin/bash devuser && \
     chown -R devuser:devuser /workspace
 
+# devuser の PATH 設定を追加
+RUN echo 'export PATH="/opt/node22/bin:$PATH"' >> /home/devuser/.bashrc && \
+    echo 'export PATH="/opt/node22/bin:$PATH"' >> /home/devuser/.profile
+
 USER devuser
 
 # デフォルトコマンド
