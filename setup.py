@@ -16,7 +16,12 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 # 依存関係の読み込み
 with open("requirements.txt", "r", encoding="utf-8") as f:
-    requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+    requirements = [
+        line.strip() for line in f
+        if line.strip()
+        and not line.startswith("#")
+        and not line.startswith("--")  # pipのオプション（--extra-index-url, --find-linksなど）を除外
+    ]
 
 setup(
     name="ms_predictor",
