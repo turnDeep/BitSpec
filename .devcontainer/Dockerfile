@@ -27,6 +27,14 @@ RUN apt-get update && apt-get install -y \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Node.js のインストール (Claude CLI に必要)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Claude CLI のインストール
+RUN npm install -g @anthropic-ai/claude-code
+
 # python と pip のシンボリックリンクを作成
 # -f オプションで既存のファイルを上書き
 RUN ln -sf /usr/bin/python3 /usr/bin/python && \
