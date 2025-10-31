@@ -41,7 +41,7 @@
     ],
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-    "postCreateCommand": "pip3 install -e .",
+    "postCreateCommand": "pip3 install --extra-index-url https://download.pytorch.org/whl/cu128 --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html -e .",
     "remoteUser": "devuser",
     "features": {
         "ghcr.io/devcontainers/features/git:1": {},
