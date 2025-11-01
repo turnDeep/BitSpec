@@ -8,7 +8,7 @@
 - **MOL/MSP対応**: MOLファイルとNIST MSP形式の完全サポート
 - **RTX 50シリーズ対応**: 最新のNVIDIA RTX 50シリーズGPU (sm_120) に最適化
 - **Mixed Precision Training**: FP16混合精度訓練による高速化とメモリ効率化
-- **複合損失関数**: MSE、コサイン類似度、KLダイバージェンスを組み合わせた損失
+- **Modified Cosine Loss**: Neutral lossを考慮したコサイン類似度損失関数
 - **Attention Pooling**: 重要な分子部分構造に注目する機構
 - **Dev Container対応**: 環境構築を簡素化するDev Container設定
 
@@ -253,17 +253,24 @@ Input (MOL/SMILES) → Molecular Graph → GCN Layers → Attention Pooling → 
 
 ## 損失関数
 
-複合損失関数を使用:
+Modified Cosine Lossを使用:
 
 ```python
-Loss = α·MSE + β·(1 - CosineSimilarity) + γ·KL_Divergence
+ModifiedCosineLoss = 1 - (CosineSimilarity + ShiftedMatching) / 2
 ```
 
-- **MSE損失** (α=1.0): ピーク強度の二乗誤差
-- **コサイン類似度損失** (β=1.0): スペクトル形状の類似性
-- **KLダイバージェンス損失** (γ=0.1): 分布の類似性
+- **通常のコサイン類似度**: スペクトル形状の基本的な類似性を評価
+- **Shifted Matching**: プリカーサーイオンの質量差を考慮したピークシフトマッチング
+  - Neutral loss（中性損失）を考慮してピークの対応関係を評価
+  - 許容誤差（tolerance）により柔軟なピークマッチングを実現
 
-重みは `config.yaml` で調整可能。
+この損失関数により、分子の構造的類似性とフラグメンテーションパターンの両方を効果的に学習できます。
+
+許容誤差は `config.yaml` で調整可能:
+```yaml
+training:
+  loss_tolerance: 0.1  # m/z単位での許容誤差
+```
 
 ## 評価メトリクス
 
