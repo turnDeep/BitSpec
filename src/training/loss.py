@@ -121,27 +121,82 @@ class SpectrumLoss(nn.Module):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
 
+class CombinedSpectrumLoss(nn.Module):
+    """複数の損失関数を組み合わせたマススペクトル損失"""
+
+    def __init__(
+        self,
+        mse_weight: float = 1.0,
+        cosine_weight: float = 1.0,
+        kl_weight: float = 0.1
+    ):
+        """
+        Args:
+            mse_weight: MSE損失の重み
+            cosine_weight: コサイン類似度損失の重み
+            kl_weight: KLダイバージェンス損失の重み
+        """
+        super().__init__()
+        self.mse_weight = mse_weight
+        self.cosine_weight = cosine_weight
+        self.kl_weight = kl_weight
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        損失を計算
+
+        Args:
+            pred: 予測スペクトル [batch_size, spectrum_dim]
+            target: 正解スペクトル [batch_size, spectrum_dim]
+
+        Returns:
+            損失値
+        """
+        # MSE損失
+        mse_loss = F.mse_loss(pred, target)
+
+        # コサイン類似度損失
+        cos_sim = F.cosine_similarity(pred, target, dim=1)
+        cosine_loss = 1.0 - cos_sim.mean()
+
+        # KLダイバージェンス損失（分布の類似性）
+        # 安定性のために小さな値を足す
+        eps = 1e-10
+        pred_norm = pred + eps
+        target_norm = target + eps
+        kl_loss = F.kl_div(pred_norm.log(), target_norm, reduction='batchmean')
+
+        # 複合損失
+        total_loss = (
+            self.mse_weight * mse_loss +
+            self.cosine_weight * cosine_loss +
+            self.kl_weight * kl_loss
+        )
+
+        return total_loss
+
+
 class FocalLoss(nn.Module):
     """Focal Loss（難しいサンプルに注目）"""
-    
+
     def __init__(self, gamma: float = 2.0, alpha: float = 0.25):
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
-    
+
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
         Args:
             pred: 予測スペクトル
             target: 正解スペクトル
-            
+
         Returns:
             損失値
         """
         bce_loss = F.binary_cross_entropy(pred, target, reduction='none')
         pt = torch.exp(-bce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * bce_loss
-        
+
         return focal_loss.mean()
 
 

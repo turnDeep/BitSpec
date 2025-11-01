@@ -24,6 +24,8 @@ data:
 # モデル設定
 model:
   type: "GCN"  # GCN, GAT, GraphTransformer
+  node_features: 157  # 原子特徴量の次元
+  edge_features: 16   # 結合特徴量の次元
   hidden_dim: 256
   num_layers: 5
   dropout: 0.1
@@ -45,17 +47,30 @@ model:
 training:
   batch_size: 32
   num_epochs: 200
+  num_workers: 4
   learning_rate: 0.001
   weight_decay: 0.0001
   scheduler: "cosine"  # step, cosine, plateau
+  scheduler_t0: 10
+  scheduler_tmult: 2
   warmup_epochs: 10
   gradient_clip: 1.0
-  
+  use_amp: true
+  use_wandb: false
+  wandb_project: "ms-prediction"
+  checkpoint_dir: "checkpoints"
+  save_interval: 5
+
+  # 損失関数の重み
+  mse_weight: 1.0
+  cosine_weight: 1.0
+  kl_weight: 0.1
+
   # 早期終了
   early_stopping:
     patience: 20
     min_delta: 0.0001
-  
+
   # チェックポイント
   checkpoint:
     save_every: 5
