@@ -1,27 +1,46 @@
-# Mass Spectrum Prediction from Chemical Structures
+# BitSpec - AI-based Mass Spectrum Prediction for GC-MS
 
-化学構造からマススペクトルを予測する深層学習システム。Graph Convolutional Network (GCN)を使用して、SMILES文字列やMOLファイルから質量スペクトルを生成します。
+化学構造からマススペクトルを予測する深層学習システム。Graph Convolutional Network (GCN)を使用して、MOLファイルやSMILES文字列から質量スペクトルを生成します。
 
 ## 特徴
 
 - **Graph Convolutional Network**: 分子グラフの構造情報を効果的に学習
-- **RTX 50シリーズ対応**: 最新のNVIDIA RTX 50シリーズGPUに最適化
-- **Mixed Precision Training**: 高速化とメモリ効率化
-- **複合損失関数**: MSE、コサイン類似度、KLダイバージェンスを組み合わせ
-- **Attention Pooling**: 重要な分子部分構造に注目
+- **MOL/MSP対応**: MOLファイルとNIST MSP形式の完全サポート
+- **RTX 50シリーズ対応**: 最新のNVIDIA RTX 50シリーズGPU (sm_120) に最適化
+- **Mixed Precision Training**: FP16混合精度訓練による高速化とメモリ効率化
+- **複合損失関数**: MSE、コサイン類似度、KLダイバージェンスを組み合わせた損失
+- **Attention Pooling**: 重要な分子部分構造に注目する機構
+- **Dev Container対応**: 環境構築を簡素化するDev Container設定
 
 ## システム要件
 
-- Python 3.8+
+- Python 3.10+
 - CUDA 12.8+
-- PyTorch 2.7+ (nightly)
-- RTX 50シリーズGPU (推奨)
+- PyTorch 2.7.0+
+- RTX 50シリーズGPU (推奨) またはその他のCUDA対応GPU
+- Docker (Dev Container使用時)
 
 ## インストール
+
+### 方法1: Dev Container (推奨)
+
+```bash
+# Visual Studio Codeで開く
+# F1 → "Remote-Containers: Reopen in Container"
+# 全ての依存関係が自動的にインストールされます
+```
+
+詳細は [DEV_CONTAINER_GUIDE.md](DEV_CONTAINER_GUIDE.md) を参照してください。
+
+### 方法2: ローカルインストール
+
 ```bash
 # リポジトリのクローン
-git clone https://github.com/yourusername/mass-spectrum-prediction.git
-cd mass-spectrum-prediction
+git clone https://github.com/turnDeep/BitSpec.git
+cd BitSpec
+
+# PyTorch 2.7.0+ (CUDA 12.8対応)
+pip install --extra-index-url https://download.pytorch.org/whl/cu128 torch>=2.7.0
 
 # 依存関係のインストール
 pip install -r requirements.txt
@@ -30,85 +49,112 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-## Claude Codeの使用
-
-このプロジェクトはClaude Codeに対応しています。Claude Codeを使用すると、AIアシスタントを使ってプロジェクトの開発や管理を効率化できます。
-
-### 利用可能なコマンド
-
-Claude Code環境内では、以下のスラッシュコマンドが使用できます:
-
-- `/setup` - 開発環境のセットアップ
-- `/preprocess` - データの前処理
-- `/train` - モデルのトレーニング
-- `/predict` - 予測の実行
-- `/test` - テストの実行
-
-### 使用方法
-
-Claude Code環境を使用している場合は、直接スラッシュコマンドを実行できます:
+## プロジェクト構造
 
 ```
-/setup          # 環境をセットアップ
-/preprocess     # データを前処理
-/train          # モデルをトレーニング
-/predict        # 予測を実行
+BitSpec/
+├── config.yaml              # 設定ファイル
+├── requirements.txt         # 依存関係
+├── setup.py                # パッケージ設定
+├── README.md               # このファイル
+├── DEV_CONTAINER_GUIDE.md  # Dev Containerガイド
+├── .devcontainer/          # Dev Container設定
+├── data/
+│   ├── NIST17.MSP          # NIST MSPファイル
+│   ├── mol_files/          # MOLファイルディレクトリ
+│   └── processed/          # 前処理済みデータ
+├── checkpoints/            # モデルチェックポイント
+├── src/
+│   ├── data/              # データ処理
+│   │   ├── mol_parser.py  # MOL/MSPパーサー
+│   │   ├── features.py    # 分子特徴量抽出
+│   │   ├── dataset.py     # データセット
+│   │   └── dataloader.py  # データローダー
+│   ├── models/            # モデル定義
+│   │   └── gcn_model.py   # GCNモデル
+│   ├── training/          # トレーニング
+│   │   └── loss.py        # 損失関数
+│   └── utils/             # ユーティリティ
+│       ├── metrics.py     # 評価メトリクス
+│       └── rtx50_compat.py # RTX 50互換性
+└── scripts/
+    ├── preprocess_data.py      # データ前処理
+    ├── train.py                # トレーニング
+    ├── predict.py              # 推論
+    ├── test_training.py        # テストトレーニング
+    └── test_data_loading.py    # データ読み込みテスト
 ```
 
-または、Pythonスクリプトを直接実行することもできます:
+## クイックスタート
+
+### 1. テストトレーニング (10サンプル)
+
+環境が正しくセットアップされているか確認:
 
 ```bash
-# 環境セットアップ
-pip install -r requirements.txt
-pip install -e .
-
-# データ前処理
-python scripts/preprocess_data.py --input data/raw/nist_data.msp --output data/processed
-
-# トレーニング
-python scripts/train.py --config config.yaml
-
-# 予測
-python scripts/predict.py --checkpoint checkpoints/best_model.pt --config config.yaml --smiles "CC(=O)OC1=CC=CC=C1C(=O)O"
+python scripts/test_training.py
 ```
 
-プロジェクト固有の質問や開発タスクについても、Claude Codeに直接質問できます。
+このスクリプトは10個のMOLファイルを使用して小規模なトレーニングを実行し、全ての機能が動作することを確認します。
 
-## データの準備
+### 2. データの準備
 
-NIST MSP形式のデータを準備します:
+NIST MSP形式のデータとMOLファイルを準備:
+
+```
+data/
+├── NIST17.MSP           # マススペクトルデータ
+└── mol_files/           # 対応するMOLファイル
+    ├── ID200001.MOL
+    ├── ID200002.MOL
+    └── ...
+```
+
+データの前処理 (オプション):
+
 ```bash
 python scripts/preprocess_data.py \
-    --input data/raw/nist_data.msp \
+    --input data/NIST17.MSP \
     --output data/processed \
-    --train_ratio 0.7 \
-    --val_ratio 0.15 \
-    --test_ratio 0.15
+    --train_ratio 0.8 \
+    --val_ratio 0.1 \
+    --test_ratio 0.1
 ```
 
-## トレーニング
+### 3. トレーニング
+
 ```bash
 python scripts/train.py --config config.yaml
 ```
 
-### 設定のカスタマイズ
+設定のカスタマイズは `config.yaml` で行えます:
 
-`config.yaml`を編集してハイパーパラメータを調整できます:
 ```yaml
 model:
-  hidden_dim: 256
-  num_layers: 5
-  dropout: 0.2
+  node_features: 157      # 原子特徴量の次元
+  edge_features: 16       # 結合特徴量の次元
+  hidden_dim: 256         # 隠れ層の次元
+  num_layers: 5           # GCN層の数
+  dropout: 0.1
 
 training:
   batch_size: 32
+  num_epochs: 200
   learning_rate: 0.001
-  num_epochs: 100
+  use_amp: true           # Mixed Precision Training
+
+gpu:
+  use_cuda: true
+  mixed_precision: true
+  compile: true           # torch.compile使用
+  rtx50:
+    enable_compat: true   # RTX 50対応を有効化
 ```
 
-## 予測
+### 4. 予測
 
-### 単一分子の予測
+#### 単一分子の予測 (SMILES)
+
 ```bash
 python scripts/predict.py \
     --checkpoint checkpoints/best_model.pt \
@@ -117,9 +163,20 @@ python scripts/predict.py \
     --output prediction.png
 ```
 
-### バッチ予測
+#### MOLファイルからの予測
+
 ```bash
-# SMILES.txtに各行1つのSMILES文字列を記載
+python scripts/predict.py \
+    --checkpoint checkpoints/best_model.pt \
+    --config config.yaml \
+    --mol_file data/mol_files/ID200001.MOL \
+    --output prediction.png
+```
+
+#### バッチ予測
+
+```bash
+# smiles.txtに各行1つのSMILES文字列を記載
 python scripts/predict.py \
     --checkpoint checkpoints/best_model.pt \
     --config config.yaml \
@@ -127,7 +184,8 @@ python scripts/predict.py \
     --output batch_predictions/
 ```
 
-### MSP形式でエクスポート
+#### MSP形式でエクスポート
+
 ```bash
 python scripts/predict.py \
     --checkpoint checkpoints/best_model.pt \
@@ -137,8 +195,9 @@ python scripts/predict.py \
 ```
 
 ## Pythonスクリプトでの使用
+
 ```python
-from src.models.gcn_model import MassSpectrumGCN
+from src.models.gcn_model import GCNMassSpecPredictor
 from scripts.predict import MassSpectrumPredictor
 
 # 予測器の初期化
@@ -147,10 +206,10 @@ predictor = MassSpectrumPredictor(
     config_path='config.yaml'
 )
 
-# 予測
+# SMILES文字列から予測
 spectrum = predictor.predict_from_smiles('CC(=O)OC1=CC=CC=C1C(=O)O')
 
-# ピークの検出
+# 有意なピークの検出
 peaks = predictor.find_significant_peaks(spectrum, threshold=0.05, top_n=20)
 print(f"Top 10 peaks: {peaks[:10]}")
 
@@ -159,59 +218,190 @@ predictor.visualize_prediction(
     smiles='CC(=O)OC1=CC=CC=C1C(=O)O',
     save_path='aspirin_spectrum.png'
 )
+
+# MSP形式でエクスポート
+predictor.export_to_msp(
+    smiles='CC(=O)OC1=CC=CC=C1C(=O)O',
+    output_path='aspirin.msp',
+    compound_name='Aspirin'
+)
 ```
 
 ## モデルアーキテクチャ
+
 ```
-Input (SMILES) → Molecular Graph → GCN Layers → Global Pooling → MLP → Mass Spectrum
-                                       ↓
-                                  Attention
+Input (MOL/SMILES) → Molecular Graph → GCN Layers → Attention Pooling → MLP → Mass Spectrum
+                                          ↓
+                                   Feature Extraction
+                                   (Residual + BatchNorm)
 ```
 
-- **入力**: 分子グラフ（ノード特徴量: 44次元、エッジ特徴量: 12次元）
-- **GCN層**: 5層のGraph Convolutional層（Residual接続付き）
-- **Attention Pooling**: 重要なノードに注目
-- **出力**: 1000次元のスペクトル（m/z 0-999）
+### 詳細
+
+- **入力**: 分子グラフ
+  - ノード特徴量: 157次元 (原子番号、次数、形式電荷、キラリティ、水素数、混成軌道、芳香族性、環情報)
+  - エッジ特徴量: 16次元 (結合タイプ、立体化学、共役、環情報)
+- **GCN層**: 5層のGraph Convolutional層
+  - 各層にResidual接続とBatch Normalizationを適用
+  - 活性化関数: ReLU
+  - ドロップアウト: 0.1
+- **Attention Pooling**: グラフレベル表現の生成
+- **出力層**:
+  - Multi-Layer Perceptron (MLP)
+  - 出力: 1000次元のスペクトル (m/z 0-999)
+  - 活性化関数: Sigmoid (強度を0-1に正規化)
+
+## 損失関数
+
+複合損失関数を使用:
+
+```python
+Loss = α·MSE + β·(1 - CosineSimilarity) + γ·KL_Divergence
+```
+
+- **MSE損失** (α=1.0): ピーク強度の二乗誤差
+- **コサイン類似度損失** (β=1.0): スペクトル形状の類似性
+- **KLダイバージェンス損失** (γ=0.1): 分布の類似性
+
+重みは `config.yaml` で調整可能。
 
 ## 評価メトリクス
 
-- **Cosine Similarity**: スペクトル形状の類似度
-- **Pearson Correlation**: ピーク強度の相関
+- **Cosine Similarity**: スペクトル形状の類似度 (主要指標)
+- **Pearson Correlation**: ピーク強度の相関係数
 - **MSE/MAE**: 予測誤差
 - **Top-K Accuracy**: 主要ピークの一致率
 
-## プロジェクト構造
+## RTX 50シリーズ対応
+
+このプロジェクトはNVIDIA RTX 50シリーズGPU (Blackwell, sm_120) に完全対応しています:
+
+- **PyTorch 2.7.0+**: sm_120アーキテクチャの公式サポート
+- **CUDA 12.8+**: 最新CUDA Toolkitによる最適化
+- **Mixed Precision Training**: FP16による高速化
+- **torch.compile**: JITコンパイルによる更なる高速化
+- **互換性レイヤー**: 必要に応じてsm_90エミュレーション
+
+詳細は `src/utils/rtx50_compat.py` を参照。
+
+## データ形式
+
+### NIST MSP形式
+
 ```
-mass-spectrum-prediction/
-├── config.yaml              # 設定ファイル
-├── requirements.txt         # 依存関係
-├── setup.py                # パッケージ設定
-├── README.md               # このファイル
-├── data/
-│   ├── raw/                # 生データ
-│   └── processed/          # 前処理済みデータ
-├── checkpoints/            # モデルチェックポイント
-├── src/
-│   ├── models/            # モデル定義
-│   ├── features/          # 特徴量化
-│   ├── data/              # データローダー
-│   └── utils/             # ユーティリティ
-└── scripts/
-    ├── preprocess_data.py # データ前処理
-    ├── train.py           # トレーニング
-    └── predict.py         # 推論
+Name: Aspirin
+InChIKey: BSYNRYMUTXBXSQ-UHFFFAOYSA-N
+Formula: C9H8O4
+MW: 180
+ID: 200001
+Num peaks: 15
+41 100.0
+55 50.0
+69 25.0
+...
+180 999.0
+
+```
+
+### MOLファイル
+
+標準のMOL V2000/V3000形式に対応。`data/mol_files/` ディレクトリにID付きで配置:
+
+```
+data/mol_files/
+├── ID200001.MOL
+├── ID200002.MOL
+└── ...
+```
+
+MSPファイルのIDとMOLファイル名のIDが対応している必要があります。
+
+## トラブルシューティング
+
+### GPU が認識されない
+
+```bash
+# CUDAの確認
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python -c "import torch; print(f'CUDA version: {torch.version.cuda}')"
+
+# RTX 50対応の確認
+python -c "from src.utils.rtx50_compat import setup_gpu_environment; setup_gpu_environment()"
+```
+
+### メモリ不足エラー
+
+`config.yaml` でバッチサイズを調整:
+
+```yaml
+training:
+  batch_size: 16  # 32から16に減らす
+```
+
+または `hidden_dim` を減らす:
+
+```yaml
+model:
+  hidden_dim: 128  # 256から128に減らす
+```
+
+### データが見つからない
+
+```bash
+# データの配置を確認
+ls -la data/NIST17.MSP
+ls -la data/mol_files/ | head
+
+# MOLファイルとMSPのIDマッピングを確認
+python scripts/test_mol_nist_mapping.py
+```
+
+## コンソールスクリプト
+
+パッケージインストール後、以下のコマンドが使用可能:
+
+```bash
+ms-train --config config.yaml         # トレーニング
+ms-predict --checkpoint model.pt ...  # 予測
+ms-evaluate --checkpoint model.pt ... # 評価
+```
+
+## 開発ツール
+
+```bash
+# コードフォーマット
+black src/ scripts/
+
+# 型チェック
+mypy src/
+
+# テスト実行
+pytest
 ```
 
 ## 参考文献
 
-- NEIMS: Neural EI-MS Prediction
-- ICEBERG/SCARF: MIT MS-Pred
-- Massformer: Graph Transformer for Mass Spectrum
+- **NEIMS**: Neural EI-MS Prediction for Unknown Compound Identification
+- **ICEBERG/SCARF**: MIT Mass Spectrum Prediction
+- **Massformer**: Graph Transformer for Small Molecule Mass Spectra Prediction
 
 ## ライセンス
 
 MIT License
 
+## 貢献
+
+プルリクエストを歓迎します。大きな変更の場合は、まずIssueを開いて変更内容を議論してください。
+
 ## お問い合わせ
 
-Issue: https://github.com/yourusername/mass-spectrum-prediction/issues
+- **GitHub Issues**: https://github.com/turnDeep/BitSpec/issues
+- **プロジェクトURL**: https://github.com/turnDeep/BitSpec
+
+## 更新履歴
+
+- **v1.0.0** (2024): 初回リリース
+  - GCNベースのマススペクトル予測モデル
+  - RTX 50シリーズ対応
+  - MOL/MSP完全サポート
+  - Dev Container対応
