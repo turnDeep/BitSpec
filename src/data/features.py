@@ -17,7 +17,7 @@ class MolecularFeaturizer:
     
     # 原子の特徴量
     ATOM_FEATURES = {
-        'atomic_num': list(range(1, 119)),  # 原子番号 1-118
+        'atomic_num': [1, 6, 7, 8, 9, 14, 15, 16, 17, 35, 53],  # H, C, N, O, F, Si, P, S, Cl, Br, I
         'degree': [0, 1, 2, 3, 4, 5, 6],
         'formal_charge': [-3, -2, -1, 0, 1, 2, 3],
         'chiral_tag': [0, 1, 2, 3],
@@ -27,9 +27,7 @@ class MolecularFeaturizer:
     
     # 結合の特徴量
     BOND_FEATURES = {
-        'bond_type': [0, 1, 2, 3, 12],  # SINGLE, DOUBLE, TRIPLE, AROMATIC
-        'stereo': [0, 1, 2, 3, 4, 5],
-        'is_conjugated': [0, 1],
+        'bond_type': [1, 2, 3, 12],  # SINGLE, DOUBLE, TRIPLE, AROMATIC (4次元)
     }
     
     def __init__(self, use_3d: bool = False):
@@ -53,16 +51,16 @@ class MolecularFeaturizer:
     def get_atom_features(self, atom: Chem.Atom) -> np.ndarray:
         """
         原子の特徴ベクトルを取得
-        
+
         Args:
             atom: RDKit原子オブジェクト
-            
+
         Returns:
-            特徴ベクトル (44次元)
+            特徴ベクトル (48次元)
         """
         features = []
-        
-        # 原子番号 (119次元)
+
+        # 原子番号 (12次元: H, C, N, O, F, Si, P, S, Cl, Br, I + unknown)
         features += self.one_hot_encoding(
             atom.GetAtomicNum(),
             self.ATOM_FEATURES['atomic_num']
@@ -109,42 +107,31 @@ class MolecularFeaturizer:
     def get_bond_features(self, bond: Chem.Bond) -> np.ndarray:
         """
         結合の特徴ベクトルを取得
-        
+
         Args:
             bond: RDKit結合オブジェクト
-            
+
         Returns:
-            特徴ベクトル (12次元)
+            特徴ベクトル (6次元)
         """
         features = []
-        
-        # 結合タイプ (6次元)
+
+        # 結合タイプ (4次元: SINGLE, DOUBLE, TRIPLE, AROMATIC)
         bond_type_map = {
             Chem.rdchem.BondType.SINGLE: 1,
             Chem.rdchem.BondType.DOUBLE: 2,
             Chem.rdchem.BondType.TRIPLE: 3,
             Chem.rdchem.BondType.AROMATIC: 12,
         }
-        features += self.one_hot_encoding(
-            bond_type_map.get(bond.GetBondType(), 0),
-            self.BOND_FEATURES['bond_type']
-        )
-        
-        # 立体化学 (7次元)
-        features += self.one_hot_encoding(
-            int(bond.GetStereo()),
-            self.BOND_FEATURES['stereo']
-        )
-        
-        # 共役 (2次元)
-        features += self.one_hot_encoding(
-            int(bond.GetIsConjugated()),
-            self.BOND_FEATURES['is_conjugated']
-        )
-        
-        # 環に含まれるか (1次元)
+        bond_type = bond_type_map.get(bond.GetBondType(), 0)
+        features += [1 if bond_type == bt else 0 for bt in self.BOND_FEATURES['bond_type']]
+
+        # 共役 (1次元: バイナリ値)
+        features.append(int(bond.GetIsConjugated()))
+
+        # 環に含まれるか (1次元: バイナリ値)
         features.append(int(bond.IsInRing()))
-        
+
         return np.array(features, dtype=np.float32)
     
     def mol_to_graph(
@@ -193,7 +180,7 @@ class MolecularFeaturizer:
         else:
             # 孤立原子の場合
             edge_index = torch.empty((2, 0), dtype=torch.long)
-            edge_attr = torch.empty((0, len(edge_features[0]) if edge_features else 12), dtype=torch.float32)
+            edge_attr = torch.empty((0, len(edge_features[0]) if edge_features else 6), dtype=torch.float32)
         
         # PyG Dataオブジェクトを作成
         data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
