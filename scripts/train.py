@@ -12,9 +12,9 @@ from datetime import datetime
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.models.gcn_model import MassSpectrumGCN
-from src.models.loss import CombinedSpectrumLoss
-from src.data.dataloader import create_dataloaders
+from src.models.gcn_model import GCNMassSpecPredictor
+from src.training.loss import CombinedSpectrumLoss
+from src.data.dataset import MassSpecDataset, NISTDataLoader
 from src.utils.rtx50_compat import setup_rtx50_compatibility
 from src.utils.metrics import calculate_metrics
 
@@ -50,25 +50,38 @@ class Trainer:
             )
         
         # データローダーの作成
+        logger.info("Creating dataset...")
+        dataset = MassSpecDataset(
+            msp_file=self.config['data']['nist_msp_path'],
+            mol_files_dir=self.config['data']['mol_files_dir'],
+            max_mz=self.config['data']['max_mz'],
+            mz_bin_size=self.config['data']['mz_bin_size'],
+            cache_file=str(Path(self.config['data']['output_dir']) / 'dataset_cache.pkl')
+        )
+
         logger.info("Creating dataloaders...")
-        self.train_loader, self.val_loader, self.test_loader = create_dataloaders(
-            train_path=self.config['data']['train_path'],
-            val_path=self.config['data']['val_path'],
-            test_path=self.config['data']['test_path'],
+        self.train_loader, self.val_loader, self.test_loader = NISTDataLoader.create_dataloaders(
+            dataset=dataset,
+            train_ratio=self.config['data']['train_split'],
+            val_ratio=self.config['data']['val_split'],
             batch_size=self.config['training']['batch_size'],
-            num_workers=self.config['training']['num_workers'],
-            max_mz=self.config['data']['max_mz']
+            num_workers=self.config.get('training', {}).get('num_workers', 4)
         )
         
         # モデルの作成
         logger.info("Creating model...")
-        self.model = MassSpectrumGCN(
+        self.model = GCNMassSpecPredictor(
             node_features=self.config['model']['node_features'],
             edge_features=self.config['model']['edge_features'],
             hidden_dim=self.config['model']['hidden_dim'],
             num_layers=self.config['model']['num_layers'],
-            output_dim=self.config['data']['max_mz'],
-            dropout=self.config['model']['dropout']
+            spectrum_dim=self.config['data']['max_mz'],
+            dropout=self.config['model']['dropout'],
+            conv_type=self.config['model'].get('gcn', {}).get('conv_type', 'GCNConv'),
+            pooling=self.config['model'].get('pooling', 'attention'),
+            activation=self.config['model'].get('gcn', {}).get('activation', 'relu'),
+            batch_norm=self.config['model'].get('gcn', {}).get('batch_norm', True),
+            residual=self.config['model'].get('gcn', {}).get('residual', True)
         ).to(self.device)
         
         # 損失関数
@@ -109,7 +122,7 @@ class Trainer:
         total_loss = 0
         
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
-        for batch_idx, (graphs, spectra) in enumerate(pbar):
+        for batch_idx, (graphs, spectra, metadatas) in enumerate(pbar):
             # データをデバイスに転送
             graphs = graphs.to(self.device)
             spectra = spectra.to(self.device)
@@ -163,7 +176,7 @@ class Trainer:
         all_metrics = []
         
         with torch.no_grad():
-            for graphs, spectra in tqdm(self.val_loader, desc="Validation"):
+            for graphs, spectra, metadatas in tqdm(self.val_loader, desc="Validation"):
                 graphs = graphs.to(self.device)
                 spectra = spectra.to(self.device)
                 
