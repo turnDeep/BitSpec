@@ -19,7 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from src.data.dataset import MassSpecDataset, NISTDataLoader
 from src.models.gcn_model import GCNMassSpecPredictor
-from src.training.loss import SpectrumLoss
+from src.training.loss import ModifiedCosineLoss
 from src.utils.metrics import calculate_metrics
 
 # ロギング設定
@@ -124,10 +124,8 @@ def test_training_with_10_samples():
     logger.info("\n3. 訓練設定")
     logger.info("-" * 60)
 
-    criterion = SpectrumLoss(
-        loss_type="combined",
-        alpha=1.0,  # MSE weight
-        beta=1.0    # Cosine weight
+    criterion = ModifiedCosineLoss(
+        tolerance=0.1
     )
 
     optimizer = Adam(
@@ -136,7 +134,7 @@ def test_training_with_10_samples():
         weight_decay=0.0001
     )
 
-    logger.info(f"  損失関数: SpectrumLoss (combined)")
+    logger.info(f"  損失関数: ModifiedCosineLoss (tolerance=0.1)")
     logger.info(f"  オプティマイザ: Adam")
     logger.info(f"  学習率: 0.001")
 
