@@ -87,11 +87,12 @@ BitSpec/
 │       ├── metrics.py     # 評価メトリクス
 │       └── rtx50_compat.py # RTX 50互換性
 └── scripts/
-    ├── preprocess_data.py      # データ前処理
-    ├── train.py                # トレーニング
+    ├── train_pipeline.py       # 統合パイプライン（ダウンロード→事前学習→ファインチューニング）★推奨★
     ├── pretrain.py             # PCQM4Mv2事前学習
     ├── finetune.py             # ファインチューニング
+    ├── train.py                # スクラッチからのトレーニング
     ├── predict.py              # 推論
+    ├── preprocess_data.py      # データ前処理
     ├── test_training.py        # テストトレーニング
     ├── test_data_loading.py    # データ読み込みテスト
     └── test_mol_nist_mapping.py # MOL-NISTマッピングテスト
@@ -99,15 +100,32 @@ BitSpec/
 
 ## クイックスタート
 
-### 1. テストトレーニング (10サンプル)
+**推奨**: PCQM4Mv2事前学習とファインチューニングを使用したトレーニング
 
-環境が正しくセットアップされているか確認:
+### 1. 統合パイプラインの実行（推奨）
+
+**完全なワークフロー（PCQM4Mv2ダウンロード→事前学習→ファインチューニング）を1コマンドで実行:**
 
 ```bash
-python scripts/test_training.py
+python scripts/train_pipeline.py --config config_pretrain.yaml
 ```
 
-このスクリプトは10個のMOLファイルを使用して小規模なトレーニングを実行し、全ての機能が動作することを確認します。
+このコマンドは以下を自動的に実行します:
+1. **PCQM4Mv2データセット（約370万分子）のダウンロード**
+2. **事前学習**: 分子の量子化学的性質（HOMO-LUMO gap）を学習
+3. **ファインチューニング**: NIST EI-MSデータでマススペクトル予測に特化
+
+**既にPCQM4Mv2をダウンロード済みの場合:**
+
+```bash
+python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download
+```
+
+**デバッグ用（小さなサブセットで高速テスト）:**
+
+```bash
+python scripts/train_pipeline.py --config config_pretrain.yaml --pretrain-subset 10000
+```
 
 ### 2. データの準備
 
@@ -122,45 +140,26 @@ data/
     └── ...
 ```
 
-データの前処理 (オプション):
+### 3. 個別ステップの実行（オプション）
+
+統合パイプラインの代わりに、各ステップを個別に実行することも可能です:
+
+#### 3a. PCQM4Mv2事前学習
 
 ```bash
-python scripts/preprocess_data.py \
-    --input data/NIST17.MSP \
-    --output data/processed \
-    --train_ratio 0.8 \
-    --val_ratio 0.1 \
-    --test_ratio 0.1
+python scripts/pretrain.py --config config_pretrain.yaml
 ```
 
-### 3. トレーニング
+#### 3b. EI-MSファインチューニング
+
+```bash
+python scripts/finetune.py --config config_pretrain.yaml
+```
+
+#### 3c. スクラッチからの学習（事前学習なし）
 
 ```bash
 python scripts/train.py --config config.yaml
-```
-
-設定のカスタマイズは `config.yaml` で行えます:
-
-```yaml
-model:
-  node_features: 48       # 原子特徴量の次元（実装最適化済み）
-  edge_features: 6        # 結合特徴量の次元（実装最適化済み）
-  hidden_dim: 256         # 隠れ層の次元
-  num_layers: 5           # GCN層の数
-  dropout: 0.1
-
-training:
-  batch_size: 32
-  num_epochs: 200
-  learning_rate: 0.001
-  use_amp: true           # Mixed Precision Training
-
-gpu:
-  use_cuda: true
-  mixed_precision: true
-  compile: true           # torch.compile使用
-  rtx50:
-    enable_compat: true   # RTX 50対応を有効化
 ```
 
 ### 4. 予測
@@ -206,14 +205,49 @@ python scripts/predict.py \
     --export_msp
 ```
 
-## PCQM4Mv2事前学習とファインチューニング
+## トレーニング戦略
 
-BitSpecは、大規模分子データセット（PCQM4Mv2）での事前学習をサポートしています。量子化学的性質（HOMO-LUMO gap）を学習することで、より少ないEI-MSデータでも高性能なモデルを構築できます。
+### PCQM4Mv2事前学習とファインチューニング（推奨）
 
-### 1. PCQM4Mv2での事前学習
+BitSpecは、大規模分子データセット（PCQM4Mv2、約370万分子）での事前学習を**基本戦略**としています。量子化学的性質（HOMO-LUMO gap）を学習することで、より少ないEI-MSデータでも高性能なモデルを構築できます。
+
+### 統合パイプラインの使用（最も簡単）
+
+**1コマンドで完全なワークフロー:**
 
 ```bash
-# PCQM4Mv2データセット（約370万分子）でGCNバックボーンを事前学習
+python scripts/train_pipeline.py --config config_pretrain.yaml
+```
+
+**パイプラインのステップ:**
+1. ✅ **PCQM4Mv2自動ダウンロード**: OGBライブラリ経由で約370万分子をダウンロード
+2. ✅ **事前学習**: HOMO-LUMO gap予測タスクでGCNバックボーンを学習
+3. ✅ **ファインチューニング**: NIST EI-MSデータでマススペクトル予測に特化
+4. ✅ **モデル保存**: `checkpoints/finetune/best_finetuned_model.pt`
+
+**オプションフラグ:**
+
+```bash
+# ダウンロードをスキップ（既にダウンロード済み）
+python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download
+
+# 事前学習をスキップ（スクラッチから学習）
+python scripts/train_pipeline.py --config config_pretrain.yaml --skip-pretrain
+
+# デバッグ用（10,000サンプルのみで事前学習）
+python scripts/train_pipeline.py --config config_pretrain.yaml --pretrain-subset 10000
+
+# ファインチューニングのみ実行
+python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download --skip-pretrain
+```
+
+### 個別ステップの実行
+
+パイプラインの各ステップを個別に実行することも可能です:
+
+#### ステップ1: PCQM4Mv2事前学習
+
+```bash
 python scripts/pretrain.py --config config_pretrain.yaml
 ```
 
@@ -221,46 +255,21 @@ python scripts/pretrain.py --config config_pretrain.yaml
 - **HOMO-LUMO gap予測**: 分子の電子的性質を理解
 - **分子グラフ表現**: 汎用的な化学構造の特徴抽出
 
-`config_pretrain.yaml` の主要設定：
-
-```yaml
-pretraining:
-  dataset: "PCQM4Mv2"
-  data_path: "data/"
-  task: "homo_lumo_gap"
-  batch_size: 256
-  num_epochs: 100
-  learning_rate: 0.001
-
-model:
-  node_features: 48    # BitSpecと同じ特徴量次元
-  edge_features: 6
-  hidden_dim: 256
-  num_layers: 5
-```
-
-### 2. EI-MSタスクへのファインチューニング
+#### ステップ2: EI-MSファインチューニング
 
 ```bash
-# 事前学習済みモデルをNIST EI-MSデータでファインチューニング
 python scripts/finetune.py --config config_pretrain.yaml
 ```
 
-ファインチューニングの戦略：
+ファインチューニングの戦略（`config_pretrain.yaml`）：
 
 ```yaml
 finetuning:
   pretrained_checkpoint: "checkpoints/pretrain/pretrained_backbone.pt"
-
-  # オプション1: バックボーン全体を凍結（予測ヘッドのみ学習）
-  freeze_backbone: false
-
-  # オプション2: 下位N層のみ凍結
-  freeze_layers: 0
-
-  # 異なる学習率の適用
-  backbone_lr: 0.0001  # 事前学習済み層は低学習率
-  head_lr: 0.001       # 新規層（spectrum_predictor）は高学習率
+  freeze_backbone: false  # バックボーン全体を凍結しない
+  freeze_layers: 0        # 下位N層のみ凍結（0で凍結なし）
+  backbone_lr: 0.0001     # 事前学習済み層は低学習率
+  head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
 ```
 
 ### 事前学習の効果
@@ -268,6 +277,7 @@ finetuning:
 - **データ効率の向上**: 少ないEI-MSデータでも高性能
 - **汎化性能の向上**: 未知の分子に対するロバスト性
 - **学習の安定化**: より良い初期重みで収束が早い
+- **転移学習**: 量子化学の知識をマススペクトル予測に活用
 
 詳細は [PRETRAINING_PROPOSAL.md](PRETRAINING_PROPOSAL.md) を参照してください。
 
@@ -486,6 +496,12 @@ MIT License
 - **プロジェクトURL**: https://github.com/turnDeep/BitSpec
 
 ## 更新履歴
+
+- **v1.3.0** (2025-11): 統合パイプライン追加
+  - `train_pipeline.py`: PCQM4Mv2ダウンロード→事前学習→ファインチューニングの統合スクリプト
+  - PCQM4Mv2自動ダウンロード機能（OGBライブラリ経由）
+  - README.mdを事前学習とファインチューニングを基本戦略とする内容に更新
+  - 1コマンドで完全なワークフローを実行可能に
 
 - **v1.2.0** (2025-11): PCQM4Mv2事前学習対応
   - PCQM4Mv2データセットでの事前学習機能追加
