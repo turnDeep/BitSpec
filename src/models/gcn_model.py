@@ -199,44 +199,60 @@ class GCNMassSpecPredictor(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-    
+
+    def extract_graph_features(self, data: Data) -> torch.Tensor:
+        """
+        事前学習用：グラフレベル表現のみを抽出
+
+        Args:
+            data: PyG Data object
+                - x: ノード特徴 [N, node_features]
+                - edge_index: エッジインデックス [2, E]
+                - batch: バッチインデックス [N]
+
+        Returns:
+            グラフレベル特徴量 [batch_size, hidden_dim]
+        """
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        # 入力埋め込み
+        x = self.node_embedding(x)
+
+        # グラフ畳み込み
+        for conv_layer in self.conv_layers:
+            x = conv_layer(x, edge_index)
+
+        # グラフプーリング
+        if self.pooling_type == "attention":
+            graph_features = self.pool(x, batch)
+        else:
+            graph_features = self.pool(x, batch)
+
+        return graph_features
+
     def forward(
-        self, 
+        self,
         data: Data
     ) -> torch.Tensor:
         """
-        Forward pass
-        
+        Forward pass (EI-MS予測用：完全なパイプライン)
+
         Args:
             data: PyG Data object
                 - x: ノード特徴 [N, node_features]
                 - edge_index: エッジインデックス [2, E]
                 - edge_attr: エッジ特徴 [E, edge_features]
                 - batch: バッチインデックス [N]
-                
+
         Returns:
             予測マススペクトル [batch_size, spectrum_dim]
         """
-        x, edge_index, edge_attr, batch = (
-            data.x, data.edge_index, data.edge_attr, data.batch
-        )
-        
-        # 入力埋め込み
-        x = self.node_embedding(x)
-        
-        # グラフ畳み込み（論文のConvolution）
-        for conv_layer in self.conv_layers:
-            x = conv_layer(x, edge_index)
-        
-        # グラフプーリング（論文のPooling）
-        if self.pooling_type == "attention":
-            graph_features = self.pool(x, batch)
-        else:
-            graph_features = self.pool(x, batch)
-        
+        # グラフ特徴量を抽出
+        graph_features = self.extract_graph_features(data)
+
         # マススペクトル予測
         spectrum = self.spectrum_predictor(graph_features)
-        
+
         return spectrum
     
     def predict_fragments(
@@ -283,9 +299,96 @@ class GCNMassSpecPredictor(nn.Module):
         return spectrum, None
 
 
+class PretrainHead(nn.Module):
+    """
+    事前学習用のヘッドモデル
+    量子化学的性質（HOMO-LUMO gap）を予測
+    """
+
+    def __init__(self, hidden_dim: int = 256, dropout: float = 0.1):
+        """
+        Args:
+            hidden_dim: 入力特徴量の次元
+            dropout: ドロップアウト率
+        """
+        super().__init__()
+        self.predictor = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.BatchNorm1d(hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, 1)  # HOMO-LUMO gap
+        )
+
+    def forward(self, graph_features: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass
+
+        Args:
+            graph_features: グラフレベル特徴量 [batch_size, hidden_dim]
+
+        Returns:
+            予測HOMO-LUMO gap [batch_size, 1]
+        """
+        return self.predictor(graph_features)
+
+
+class MultiTaskPretrainHead(nn.Module):
+    """
+    マルチタスク事前学習用のヘッドモデル
+    複数の量子化学的性質を同時予測
+    """
+
+    def __init__(self, hidden_dim: int = 256, dropout: float = 0.1):
+        """
+        Args:
+            hidden_dim: 入力特徴量の次元
+            dropout: ドロップアウト率
+        """
+        super().__init__()
+
+        # 共通の特徴抽出層
+        self.shared_layers = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        # タスク固有のヘッド
+        self.homo_lumo_head = nn.Linear(hidden_dim, 1)  # HOMO-LUMO gap
+        self.dipole_head = nn.Linear(hidden_dim, 3)      # 双極子モーメント (x, y, z)
+        self.energy_head = nn.Linear(hidden_dim, 1)      # 全エネルギー
+
+    def forward(
+        self,
+        graph_features: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Forward pass
+
+        Args:
+            graph_features: グラフレベル特徴量 [batch_size, hidden_dim]
+
+        Returns:
+            homo_lumo: 予測HOMO-LUMO gap [batch_size, 1]
+            dipole: 予測双極子モーメント [batch_size, 3]
+            energy: 予測全エネルギー [batch_size, 1]
+        """
+        # 共通の特徴抽出
+        shared_features = self.shared_layers(graph_features)
+
+        # 各タスクの予測
+        homo_lumo = self.homo_lumo_head(shared_features)
+        dipole = self.dipole_head(shared_features)
+        energy = self.energy_head(shared_features)
+
+        return homo_lumo, dipole, energy
+
+
 class GCNEnsemble(nn.Module):
     """複数のGCNモデルのアンサンブル"""
-    
+
     def __init__(
         self,
         models: List[GCNMassSpecPredictor],
@@ -293,22 +396,22 @@ class GCNEnsemble(nn.Module):
     ):
         super().__init__()
         self.models = nn.ModuleList(models)
-        
+
         if weights is None:
             self.weights = [1.0 / len(models)] * len(models)
         else:
             assert len(weights) == len(models)
             self.weights = weights
-    
+
     def forward(self, data: Data) -> torch.Tensor:
         """アンサンブル予測"""
         predictions = []
-        
+
         for model in self.models:
             with torch.no_grad():
                 pred = model(data)
             predictions.append(pred)
-        
+
         # 重み付き平均
         ensemble_pred = sum(w * p for w, p in zip(self.weights, predictions))
         return ensemble_pred
