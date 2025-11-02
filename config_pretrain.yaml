@@ -43,7 +43,7 @@ model:
 pretraining:
   # データセット設定
   dataset: "PCQM4Mv2"
-  data_path: "data/pcqm4mv2"
+  data_path: "data/"
   task: "homo_lumo_gap"  # homo_lumo_gap または multi_task
 
   # 訓練設定
