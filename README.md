@@ -54,24 +54,33 @@ pip install -e .
 ```
 BitSpec/
 ├── config.yaml              # 設定ファイル
+├── config_pretrain.yaml     # 事前学習設定ファイル
 ├── requirements.txt         # 依存関係
 ├── setup.py                # パッケージ設定
 ├── README.md               # このファイル
 ├── DEV_CONTAINER_GUIDE.md  # Dev Containerガイド
+├── PRETRAINING_PROPOSAL.md # 事前学習提案
+├── TECHNICAL_SUMMARY.md    # 技術サマリー
+├── QUICK_REFERENCE.md      # クイックリファレンス
+├── ANALYSIS_INDEX.md       # 分析インデックス
+├── ANALYSIS_PRETRAINING_INFRASTRUCTURE.md # 事前学習インフラ分析
 ├── .devcontainer/          # Dev Container設定
 ├── data/
 │   ├── NIST17.MSP          # NIST MSPファイル
 │   ├── mol_files/          # MOLファイルディレクトリ
 │   └── processed/          # 前処理済みデータ
 ├── checkpoints/            # モデルチェックポイント
+│   ├── pretrain/          # 事前学習モデル
+│   └── finetune/          # ファインチューニングモデル
 ├── src/
 │   ├── data/              # データ処理
 │   │   ├── mol_parser.py  # MOL/MSPパーサー
 │   │   ├── features.py    # 分子特徴量抽出
 │   │   ├── dataset.py     # データセット
-│   │   └── dataloader.py  # データローダー
+│   │   ├── dataloader.py  # データローダー
+│   │   └── pcqm4mv2_loader.py # PCQM4Mv2データローダー
 │   ├── models/            # モデル定義
-│   │   └── gcn_model.py   # GCNモデル
+│   │   └── gcn_model.py   # GCNモデル + 事前学習ヘッド
 │   ├── training/          # トレーニング
 │   │   └── loss.py        # 損失関数
 │   └── utils/             # ユーティリティ
@@ -80,9 +89,12 @@ BitSpec/
 └── scripts/
     ├── preprocess_data.py      # データ前処理
     ├── train.py                # トレーニング
+    ├── pretrain.py             # PCQM4Mv2事前学習
+    ├── finetune.py             # ファインチューニング
     ├── predict.py              # 推論
     ├── test_training.py        # テストトレーニング
-    └── test_data_loading.py    # データ読み込みテスト
+    ├── test_data_loading.py    # データ読み込みテスト
+    └── test_mol_nist_mapping.py # MOL-NISTマッピングテスト
 ```
 
 ## クイックスタート
@@ -131,8 +143,8 @@ python scripts/train.py --config config.yaml
 
 ```yaml
 model:
-  node_features: 157      # 原子特徴量の次元
-  edge_features: 16       # 結合特徴量の次元
+  node_features: 48       # 原子特徴量の次元（実装最適化済み）
+  edge_features: 6        # 結合特徴量の次元（実装最適化済み）
   hidden_dim: 256         # 隠れ層の次元
   num_layers: 5           # GCN層の数
   dropout: 0.1
@@ -194,6 +206,71 @@ python scripts/predict.py \
     --export_msp
 ```
 
+## PCQM4Mv2事前学習とファインチューニング
+
+BitSpecは、大規模分子データセット（PCQM4Mv2）での事前学習をサポートしています。量子化学的性質（HOMO-LUMO gap）を学習することで、より少ないEI-MSデータでも高性能なモデルを構築できます。
+
+### 1. PCQM4Mv2での事前学習
+
+```bash
+# PCQM4Mv2データセット（約370万分子）でGCNバックボーンを事前学習
+python scripts/pretrain.py --config config_pretrain.yaml
+```
+
+事前学習では以下を学習します：
+- **HOMO-LUMO gap予測**: 分子の電子的性質を理解
+- **分子グラフ表現**: 汎用的な化学構造の特徴抽出
+
+`config_pretrain.yaml` の主要設定：
+
+```yaml
+pretraining:
+  dataset: "PCQM4Mv2"
+  data_path: "data/"
+  task: "homo_lumo_gap"
+  batch_size: 256
+  num_epochs: 100
+  learning_rate: 0.001
+
+model:
+  node_features: 48    # BitSpecと同じ特徴量次元
+  edge_features: 6
+  hidden_dim: 256
+  num_layers: 5
+```
+
+### 2. EI-MSタスクへのファインチューニング
+
+```bash
+# 事前学習済みモデルをNIST EI-MSデータでファインチューニング
+python scripts/finetune.py --config config_pretrain.yaml
+```
+
+ファインチューニングの戦略：
+
+```yaml
+finetuning:
+  pretrained_checkpoint: "checkpoints/pretrain/pretrained_backbone.pt"
+
+  # オプション1: バックボーン全体を凍結（予測ヘッドのみ学習）
+  freeze_backbone: false
+
+  # オプション2: 下位N層のみ凍結
+  freeze_layers: 0
+
+  # 異なる学習率の適用
+  backbone_lr: 0.0001  # 事前学習済み層は低学習率
+  head_lr: 0.001       # 新規層（spectrum_predictor）は高学習率
+```
+
+### 事前学習の効果
+
+- **データ効率の向上**: 少ないEI-MSデータでも高性能
+- **汎化性能の向上**: 未知の分子に対するロバスト性
+- **学習の安定化**: より良い初期重みで収束が早い
+
+詳細は [PRETRAINING_PROPOSAL.md](PRETRAINING_PROPOSAL.md) を参照してください。
+
 ## Pythonスクリプトでの使用
 
 ```python
@@ -239,8 +316,8 @@ Input (MOL/SMILES) → Molecular Graph → GCN Layers → Attention Pooling → 
 ### 詳細
 
 - **入力**: 分子グラフ
-  - ノード特徴量: 157次元 (原子番号、次数、形式電荷、キラリティ、水素数、混成軌道、芳香族性、環情報)
-  - エッジ特徴量: 16次元 (結合タイプ、立体化学、共役、環情報)
+  - ノード特徴量: 48次元 (原子番号12D、次数8D、形式電荷8D、キラリティ5D、水素数6D、混成軌道7D、芳香族性1D、環情報1D)
+  - エッジ特徴量: 6次元 (結合タイプ4D、共役1D、環情報1D)
 - **GCN層**: 5層のGraph Convolutional層
   - 各層にResidual接続とBatch Normalizationを適用
   - 活性化関数: ReLU
@@ -391,6 +468,9 @@ pytest
 - **NEIMS**: Neural EI-MS Prediction for Unknown Compound Identification
 - **ICEBERG/SCARF**: MIT Mass Spectrum Prediction
 - **Massformer**: Graph Transformer for Small Molecule Mass Spectra Prediction
+- **PCQM4Mv2**: Quantum Chemistry Structures and Properties of 134 kilo Molecules (OGB-LSC 2022)
+- **Transfer Learning with GNNs**: "Transfer learning with graph neural networks for improved molecular property prediction" (Nature Communications, 2024)
+- **Atom-level Pretraining**: "Pretraining graph transformers with atom-in-a-molecule quantum properties for improved ADMET modeling" (J. Cheminformatics, 2025)
 
 ## ライセンス
 
@@ -406,6 +486,20 @@ MIT License
 - **プロジェクトURL**: https://github.com/turnDeep/BitSpec
 
 ## 更新履歴
+
+- **v1.2.0** (2025-11): PCQM4Mv2事前学習対応
+  - PCQM4Mv2データセットでの事前学習機能追加
+  - ファインチューニングスクリプト実装
+  - 転移学習のための凍結戦略サポート
+  - マルチタスク事前学習ヘッド追加
+  - PretrainHead/MultiTaskPretrainHead実装
+  - 詳細な技術文書追加（TECHNICAL_SUMMARY.md等）
+
+- **v1.1.0** (2025-11): 特徴量最適化
+  - 原子特徴量を157次元→48次元に最適化
+  - 結合特徴量を16次元→6次元に最適化
+  - MOL-NISTマッピングの厳密化
+  - ModifiedCosineLossに統一
 
 - **v1.0.0** (2024): 初回リリース
   - GCNベースのマススペクトル予測モデル
