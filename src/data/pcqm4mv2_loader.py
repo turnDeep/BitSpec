@@ -22,7 +22,7 @@ class PCQM4Mv2Wrapper(Dataset):
 
     def __init__(
         self,
-        root: str = 'data/pcqm4mv2',
+        root: str = 'data/',
         split: str = 'train',
         transform=None,
         node_feature_dim: int = 48,
@@ -134,7 +134,7 @@ class PCQM4Mv2DataLoader:
 
     @staticmethod
     def create_dataloaders(
-        root: str = 'data/pcqm4mv2',
+        root: str = 'data/',
         batch_size: int = 256,
         num_workers: int = 4,
         node_feature_dim: int = 48,
@@ -220,7 +220,7 @@ if __name__ == "__main__":
 
     # 小さなサブセットでテスト
     train_loader, val_loader, test_loader = PCQM4Mv2DataLoader.create_dataloaders(
-        root='data/pcqm4mv2',
+        root='data/',
         batch_size=32,
         num_workers=0,
         use_subset=100  # 100サンプルのみ
