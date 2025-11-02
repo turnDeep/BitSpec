@@ -65,7 +65,7 @@ pretraining:
   save_interval: 10
 
   # デバッグ用（小さなサブセットで試す場合）
-  use_subset: null  # 例: 10000 でテスト用に10000サンプルのみ使用
+  use_subset: null  # 全データ（約30万件）を使用
 
   # Weights & Biases
   use_wandb: false
