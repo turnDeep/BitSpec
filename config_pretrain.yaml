@@ -28,7 +28,7 @@ model:
   num_layers: 5
   spectrum_dim: 1000
   dropout: 0.1
-  pooling: "attention"
+  pooling: "mean"  # attention → mean (AttentionalAggregationは初回実行が極めて遅い)
 
   # GCN固有の設定
   gcn:
@@ -46,14 +46,14 @@ pretraining:
 
   # 訓練設定（GPU使用率最適化）
   # バッチサイズ調整ガイド：
-  # - RTX 5070 Ti (17GB): 2048-4096推奨
-  # - OOM発生時: 1536 → 1024 と段階的に減らす
-  # - GPU使用率が低い場合: さらに増やす（3072, 4096など）
-  batch_size: 2048  # 512 → 2048 (RTX 5070 Ti 17GB VRAMを活用)
+  # - RTX 5070 Ti (17GB): 512-1024推奨（安定性重視）
+  # - 大きすぎるバッチサイズは初回処理に時間がかかる
+  # - GPU使用率が低い場合: 段階的に増やす（768, 1024など）
+  batch_size: 512  # 2048 → 512 (初回バッチ処理を高速化、安定性向上)
   num_epochs: 100
-  num_workers: 8  # 12 → 8 (システム推奨値、過剰なワーカーによるオーバーヘッドを削減)
-  prefetch_factor: 8  # 4 → 8 (データ待ちを削減)
-  gradient_accumulation_steps: 1  # 2 → 1 (バッチサイズを増やしたため不要)
+  num_workers: 4  # 8 → 4 (データローダーのオーバーヘッド削減)
+  prefetch_factor: 4  # 8 → 4 (過剰な先読みを削減)
+  gradient_accumulation_steps: 4  # 1 → 4 (実効バッチサイズ2048を維持)
   learning_rate: 0.001
   weight_decay: 0.0001
 

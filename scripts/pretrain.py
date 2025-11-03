@@ -167,21 +167,35 @@ class PretrainTrainer:
         gpu_utils = []
         start_time = time.time()
 
+        if epoch == 1:
+            logger.info("Starting epoch 1...")
+            logger.info("Waiting for first batch from dataloader (this may take 10-30 seconds)...")
+
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
         for batch_idx, (graphs, targets) in enumerate(pbar):
+            if epoch == 1 and batch_idx == 0:
+                logger.info(f"✓ First batch received from dataloader")
             batch_start = time.time()
 
-            # 初回バッチのみ警告（torch.compileのコンパイルが発生）
-            if epoch == 1 and batch_idx == 0 and self.config.get('gpu', {}).get('compile', False):
+            # 初回バッチの詳細なタイミング情報を記録
+            if epoch == 1 and batch_idx == 0:
                 logger.info("=" * 80)
-                logger.info("⚠️  FIRST BATCH - torch.compile will now compile the model")
-                logger.info("⚠️  This can take 10-30+ MINUTES. The progress bar will appear frozen.")
-                logger.info("⚠️  Please be patient - this is a one-time cost.")
+                logger.info("⚠️  FIRST BATCH - Starting processing...")
+                logger.info(f"   Batch size: {self.config['pretraining']['batch_size']}")
+                logger.info(f"   Num nodes in batch: {graphs.x.shape[0] if hasattr(graphs, 'x') else 'unknown'}")
+                logger.info(f"   Pooling type: {self.config['model'].get('pooling', 'unknown')}")
+                logger.info("   This may take 30-60 seconds for the first batch.")
                 logger.info("=" * 80)
+                step_start = time.time()
 
             # データをデバイスに転送
+            if epoch == 1 and batch_idx == 0:
+                logger.info(f"   [1/5] Transferring data to GPU...")
             graphs = graphs.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
+            if epoch == 1 and batch_idx == 0:
+                logger.info(f"   [1/5] ✓ Data transferred ({time.time() - step_start:.2f}s)")
+                step_start = time.time()
 
             # NaN/Infのターゲットをスキップ
             valid_mask = torch.isfinite(targets)
@@ -199,9 +213,16 @@ class PretrainTrainer:
             if self.scaler:
                 with torch.amp.autocast('cuda'):
                     # GCNでグラフ表現を抽出
+                    if epoch == 1 and batch_idx == 0:
+                        logger.info(f"   [2/5] Extracting graph features (forward pass)...")
                     graph_features = self.backbone.extract_graph_features(graphs)
+                    if epoch == 1 and batch_idx == 0:
+                        logger.info(f"   [2/5] ✓ Features extracted ({time.time() - step_start:.2f}s)")
+                        step_start = time.time()
 
                     # ターゲット予測
+                    if epoch == 1 and batch_idx == 0:
+                        logger.info(f"   [3/5] Running prediction head...")
                     if self.task == 'homo_lumo_gap':
                         pred = self.pretrain_head(graph_features).squeeze()
                         # valid_maskでフィルタリング
@@ -214,15 +235,25 @@ class PretrainTrainer:
                         homo_lumo, dipole, energy = self.pretrain_head(graph_features)
                         # マルチタスク損失（ここではHOMO-LUMOのみ使用）
                         loss = F.mse_loss(homo_lumo.squeeze(), targets)
+                    if epoch == 1 and batch_idx == 0:
+                        logger.info(f"   [3/5] ✓ Prediction completed ({time.time() - step_start:.2f}s)")
+                        step_start = time.time()
 
                     # Gradient accumulationのためにlossをスケール
                     loss = loss / self.gradient_accumulation_steps
 
                 # 逆伝播
+                if epoch == 1 and batch_idx == 0:
+                    logger.info(f"   [4/5] Running backward pass...")
                 self.scaler.scale(loss).backward()
+                if epoch == 1 and batch_idx == 0:
+                    logger.info(f"   [4/5] ✓ Backward completed ({time.time() - step_start:.2f}s)")
+                    step_start = time.time()
 
                 # Gradient accumulationのステップに達したらオプティマイザを更新
                 if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                    if epoch == 1 and batch_idx == 0:
+                        logger.info(f"   [5/5] Updating optimizer...")
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(
                         list(self.backbone.parameters()) + list(self.pretrain_head.parameters()),
@@ -230,6 +261,8 @@ class PretrainTrainer:
                     )
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
+                    if epoch == 1 and batch_idx == 0:
+                        logger.info(f"   [5/5] ✓ Optimizer updated ({time.time() - step_start:.2f}s)")
             else:
                 # GCNでグラフ表現を抽出
                 graph_features = self.backbone.extract_graph_features(graphs)
@@ -270,9 +303,10 @@ class PretrainTrainer:
             # 初回バッチ完了時のメッセージ
             if epoch == 1 and batch_idx == 0:
                 logger.info("=" * 80)
-                logger.info(f"✓ FIRST BATCH COMPLETED in {batch_time:.1f}s")
-                if self.config.get('gpu', {}).get('compile', False):
-                    logger.info("✓ torch.compile compilation finished! Subsequent batches will be much faster.")
+                logger.info(f"🎉 FIRST BATCH COMPLETED in {batch_time:.1f}s")
+                logger.info(f"   Total time: {batch_time:.1f}s")
+                logger.info(f"   Throughput: {self.config['pretraining']['batch_size'] / batch_time:.1f} samples/s")
+                logger.info("   Subsequent batches will be faster due to CUDA kernel caching.")
                 logger.info("=" * 80)
 
             # GPU使用率の取得（10バッチごと）
