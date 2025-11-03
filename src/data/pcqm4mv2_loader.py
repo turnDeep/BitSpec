@@ -31,7 +31,7 @@ class PCQM4Mv2Wrapper(Dataset):
         """
         Args:
             root: データセットのルートディレクトリ
-            split: 'train', 'valid', 'test'のいずれか
+            split: 'train', 'val', 'test', 'holdout'のいずれか
             transform: データ変換関数
             node_feature_dim: ノード特徴量の次元（BitSpecに合わせる）
             edge_feature_dim: エッジ特徴量の次元（BitSpecに合わせる）
@@ -165,7 +165,7 @@ class PCQM4Mv2DataLoader:
 
         val_dataset = PCQM4Mv2Wrapper(
             root=root,
-            split='valid',
+            split='val',
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim
         )
