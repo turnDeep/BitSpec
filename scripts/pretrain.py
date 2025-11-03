@@ -63,7 +63,8 @@ class PretrainTrainer:
             node_feature_dim=self.config['model']['node_features'],
             edge_feature_dim=self.config['model']['edge_features'],
             use_subset=self.config['pretraining'].get('use_subset', None),
-            prefetch_factor=self.config['pretraining'].get('prefetch_factor', 2)
+            prefetch_factor=self.config['pretraining'].get('prefetch_factor', 2),
+            use_cache=True  # オンデマンドキャッシュを有効化（2回目以降のエポックが高速化）
         )
 
         # GCNバックボーンの作成
