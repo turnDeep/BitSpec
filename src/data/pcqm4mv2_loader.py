@@ -96,12 +96,17 @@ class PCQM4Mv2Wrapper(Dataset):
         # ノード特徴量の適応
         # PCQM4Mv2は9次元のノード特徴（原子番号など）
         # BitSpecは48次元を期待しているので、パディングまたは埋め込みが必要
+
+        # CRITICAL FIX: Convert node features to float to avoid dtype mismatch with Mixed Precision (FP16)
+        # PCQM4Mv2 node features are integers (atomic numbers), but models expect float input
+        data.x = data.x.float()
+
         if data.x.shape[1] < self.node_feature_dim:
             # ゼロパディングで次元を合わせる
             padding = torch.zeros(
                 data.x.shape[0],
                 self.node_feature_dim - data.x.shape[1],
-                dtype=data.x.dtype
+                dtype=torch.float32  # Always use float32 for features
             )
             data.x = torch.cat([data.x, padding], dim=1)
         elif data.x.shape[1] > self.node_feature_dim:
@@ -110,11 +115,14 @@ class PCQM4Mv2Wrapper(Dataset):
 
         # エッジ特徴量の適応
         if hasattr(data, 'edge_attr') and data.edge_attr is not None:
+            # CRITICAL FIX: Convert edge features to float as well
+            data.edge_attr = data.edge_attr.float()
+
             if data.edge_attr.shape[1] < self.edge_feature_dim:
                 padding = torch.zeros(
                     data.edge_attr.shape[0],
                     self.edge_feature_dim - data.edge_attr.shape[1],
-                    dtype=data.edge_attr.dtype
+                    dtype=torch.float32  # Always use float32 for features
                 )
                 data.edge_attr = torch.cat([data.edge_attr, padding], dim=1)
             elif data.edge_attr.shape[1] > self.edge_feature_dim:
@@ -122,7 +130,7 @@ class PCQM4Mv2Wrapper(Dataset):
         else:
             # エッジ特徴がない場合はダミーを作成
             num_edges = data.edge_index.shape[1]
-            data.edge_attr = torch.zeros(num_edges, self.edge_feature_dim)
+            data.edge_attr = torch.zeros(num_edges, self.edge_feature_dim, dtype=torch.float32)
 
         return data
 
