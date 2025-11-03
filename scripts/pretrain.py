@@ -169,12 +169,19 @@ class PretrainTrainer:
 
         if epoch == 1:
             logger.info("Starting epoch 1...")
-            logger.info("Waiting for first batch from dataloader (this may take 10-30 seconds)...")
+            logger.info("Initializing dataloader iterator...")
+            import time as time_module
+            iter_start = time_module.time()
 
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
+
+        if epoch == 1:
+            logger.info(f"✓ Iterator initialized ({time_module.time() - iter_start:.2f}s)")
+            logger.info("Waiting for first batch from dataloader (this may take 10-30 seconds)...")
+
         for batch_idx, (graphs, targets) in enumerate(pbar):
             if epoch == 1 and batch_idx == 0:
-                logger.info(f"✓ First batch received from dataloader")
+                logger.info(f"✓ First batch received from dataloader ({time_module.time() - iter_start:.2f}s total)")
             batch_start = time.time()
 
             # 初回バッチの詳細なタイミング情報を記録

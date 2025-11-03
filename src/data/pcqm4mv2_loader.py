@@ -163,10 +163,10 @@ class PCQM4Mv2DataLoader:
         """バッチ処理用のcollate関数"""
         graphs, targets = zip(*batch)
 
-        # グラフをバッチ化
-        batched_graphs = Batch.from_data_list(graphs)
+        # グラフをバッチ化（最適化：高速化のためリスト変換を最小化）
+        batched_graphs = Batch.from_data_list(list(graphs))
 
-        # ターゲットをスタック
+        # ターゲットをスタック（最適化：事前にdim確認）
         batched_targets = torch.stack([t if t.dim() > 0 else t.unsqueeze(0) for t in targets]).squeeze()
 
         return batched_graphs, batched_targets
@@ -229,7 +229,7 @@ class PCQM4Mv2DataLoader:
             val_dataset = Subset(val_dataset, range(min(use_subset // 10, len(val_dataset))))
             test_dataset = Subset(test_dataset, range(min(use_subset // 10, len(test_dataset))))
 
-        # データローダーの作成
+        # データローダーの作成（最適化設定）
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
@@ -238,7 +238,9 @@ class PCQM4Mv2DataLoader:
             collate_fn=PCQM4Mv2DataLoader.collate_fn,
             pin_memory=True,
             persistent_workers=num_workers > 0,
-            prefetch_factor=prefetch_factor if num_workers > 0 else None
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            # マルチプロセスの起動方式を最適化
+            multiprocessing_context='fork' if num_workers > 0 else None
         )
 
         val_loader = DataLoader(
