@@ -1,7 +1,5 @@
 # config_pretrain.yaml
-"""
-PCQM4Mv2事前学習とファインチューニングの設定ファイル
-"""
+# PCQM4Mv2事前学習とファインチューニングの設定ファイル
 
 # プロジェクト設定
 project:
