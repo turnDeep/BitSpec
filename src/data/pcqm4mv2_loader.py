@@ -18,6 +18,10 @@ class PCQM4Mv2Wrapper(Dataset):
     """
     PCQM4Mv2データセットのラッパー
     BitSpecのモデルに適合するようにデータを変換
+
+    パフォーマンス最適化：
+    - 初回読み込み時に特徴量を事前処理してキャッシュ
+    - CPUボトルネックを削減
     """
 
     def __init__(
@@ -27,6 +31,7 @@ class PCQM4Mv2Wrapper(Dataset):
         transform=None,
         node_feature_dim: int = 48,
         edge_feature_dim: int = 6,
+        use_cache: bool = True,
     ):
         """
         Args:
@@ -35,6 +40,7 @@ class PCQM4Mv2Wrapper(Dataset):
             transform: データ変換関数
             node_feature_dim: ノード特徴量の次元（BitSpecに合わせる）
             edge_feature_dim: エッジ特徴量の次元（BitSpecに合わせる）
+            use_cache: 前処理したデータをキャッシュするか
         """
         super().__init__()
         self.root = Path(root)
@@ -42,13 +48,34 @@ class PCQM4Mv2Wrapper(Dataset):
         self.transform = transform
         self.node_feature_dim = node_feature_dim
         self.edge_feature_dim = edge_feature_dim
+        self.use_cache = use_cache
 
         print(f"Loading PCQM4Mv2 dataset (split: {split})...")
         self.dataset = PCQM4Mv2(root=str(self.root), split=split)
         print(f"Loaded {len(self.dataset)} molecules")
 
+        # キャッシュの初期化
+        self._cache = {} if use_cache else None
+        if use_cache:
+            print(f"Preprocessing and caching {split} data...")
+            self._preprocess_all()
+            print(f"✓ Cache created for {len(self._cache)} samples")
+
     def __len__(self) -> int:
         return len(self.dataset)
+
+    def _preprocess_all(self):
+        """
+        全データを事前処理してキャッシュ
+        CPUボトルネックを削減するための最適化
+        """
+        # 少量のサンプルで試す（メモリ使用量を考慮）
+        # 本番環境ではバッチごとにキャッシュを構築
+        cache_limit = 10000 if self.split == 'train' else len(self.dataset)
+
+        for idx in tqdm(range(min(cache_limit, len(self.dataset))), desc="Caching"):
+            data = self.dataset[idx]
+            self._cache[idx] = self._adapt_features(data)
 
     def _adapt_features(self, data: Data) -> Data:
         """
@@ -102,10 +129,16 @@ class PCQM4Mv2Wrapper(Dataset):
             graph_data: グラフデータ
             target: HOMO-LUMO gap
         """
-        data = self.dataset[idx]
-
-        # データの適応
-        data = self._adapt_features(data)
+        # キャッシュを使用する場合
+        if self.use_cache and idx in self._cache:
+            data = self._cache[idx]
+        else:
+            data = self.dataset[idx]
+            # データの適応
+            data = self._adapt_features(data)
+            # キャッシュに追加（オンデマンドキャッシング）
+            if self.use_cache:
+                self._cache[idx] = data
 
         if self.transform:
             data = self.transform(data)
@@ -141,6 +174,7 @@ class PCQM4Mv2DataLoader:
         edge_feature_dim: int = 6,
         use_subset: Optional[int] = None,
         prefetch_factor: int = 2,
+        use_cache: bool = True,
     ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
         訓練、検証、テストのデータローダーを作成
@@ -152,6 +186,8 @@ class PCQM4Mv2DataLoader:
             node_feature_dim: ノード特徴量の次元
             edge_feature_dim: エッジ特徴量の次元
             use_subset: サブセットのサイズ（テスト用、Noneで全データ）
+            prefetch_factor: 各ワーカーの先読みバッチ数
+            use_cache: 前処理データをキャッシュするか
 
         Returns:
             train_loader, val_loader, test_loader
@@ -161,14 +197,16 @@ class PCQM4Mv2DataLoader:
             root=root,
             split='train',
             node_feature_dim=node_feature_dim,
-            edge_feature_dim=edge_feature_dim
+            edge_feature_dim=edge_feature_dim,
+            use_cache=use_cache
         )
 
         val_dataset = PCQM4Mv2Wrapper(
             root=root,
             split='val',
             node_feature_dim=node_feature_dim,
-            edge_feature_dim=edge_feature_dim
+            edge_feature_dim=edge_feature_dim,
+            use_cache=use_cache
         )
 
         # テストデータセット（PCQM4Mv2にはtest-devとtest-challengeがある）

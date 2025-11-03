@@ -15,6 +15,7 @@ from tqdm import tqdm
 import wandb
 from datetime import datetime
 import sys
+import time
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.gcn_model import GCNMassSpecPredictor, PretrainHead, MultiTaskPretrainHead
@@ -144,8 +145,14 @@ class PretrainTrainer:
         total_loss = 0
         num_batches = 0
 
+        # GPU使用率モニタリング用
+        batch_times = []
+        gpu_utils = []
+        start_time = time.time()
+
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
         for batch_idx, (graphs, targets) in enumerate(pbar):
+            batch_start = time.time()
             # データをデバイスに転送
             graphs = graphs.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
@@ -230,18 +237,48 @@ class PretrainTrainer:
             total_loss += loss.item() * self.gradient_accumulation_steps
             num_batches += 1
 
-            # プログレスバーの更新
-            pbar.set_postfix({'loss': loss.item() * self.gradient_accumulation_steps})
+            # バッチ処理時間の記録
+            batch_time = time.time() - batch_start
+            batch_times.append(batch_time)
+
+            # GPU使用率の取得（10バッチごと）
+            if batch_idx % 10 == 0 and torch.cuda.is_available():
+                try:
+                    gpu_util = torch.cuda.utilization(self.device)
+                    gpu_utils.append(gpu_util)
+                except:
+                    pass
+
+            # プログレスバーの更新（GPU使用率を追加）
+            postfix = {'loss': loss.item() * self.gradient_accumulation_steps}
+            if gpu_utils:
+                postfix['GPU%'] = f"{gpu_utils[-1]}"
+            if batch_times:
+                postfix['batch/s'] = f"{1.0/batch_time:.2f}"
+            pbar.set_postfix(postfix)
 
             # Weights & Biasesへのログ
             if self.config.get('pretraining', {}).get('use_wandb', False):
                 wandb.log({
                     'train/loss': loss.item(),
                     'train/lr': self.optimizer.param_groups[0]['lr'],
+                    'train/batch_time': batch_time,
+                    'train/gpu_util': gpu_utils[-1] if gpu_utils else 0,
                     'epoch': epoch
                 })
 
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+
+        # エポック統計の出力
+        if batch_times:
+            avg_batch_time = sum(batch_times) / len(batch_times)
+            throughput = self.config['pretraining']['batch_size'] / avg_batch_time
+            logger.info(f"  Avg batch time: {avg_batch_time:.3f}s, Throughput: {throughput:.1f} samples/s")
+
+        if gpu_utils:
+            avg_gpu_util = sum(gpu_utils) / len(gpu_utils)
+            logger.info(f"  Avg GPU utilization: {avg_gpu_util:.1f}%")
+
         return {'loss': avg_loss}
 
     def validate(self, epoch: int) -> dict:

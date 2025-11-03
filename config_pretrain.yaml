@@ -44,12 +44,16 @@ pretraining:
   data_path: "data/"
   task: "homo_lumo_gap"  # homo_lumo_gap または multi_task
 
-  # 訓練設定
-  batch_size: 512
+  # 訓練設定（GPU使用率最適化）
+  # バッチサイズ調整ガイド：
+  # - RTX 5070 Ti (17GB): 2048-4096推奨
+  # - OOM発生時: 1536 → 1024 と段階的に減らす
+  # - GPU使用率が低い場合: さらに増やす（3072, 4096など）
+  batch_size: 2048  # 512 → 2048 (RTX 5070 Ti 17GB VRAMを活用)
   num_epochs: 100
-  num_workers: 12
-  prefetch_factor: 4
-  gradient_accumulation_steps: 2
+  num_workers: 8  # 12 → 8 (システム推奨値、過剰なワーカーによるオーバーヘッドを削減)
+  prefetch_factor: 8  # 4 → 8 (データ待ちを削減)
+  gradient_accumulation_steps: 1  # 2 → 1 (バッチサイズを増やしたため不要)
   learning_rate: 0.001
   weight_decay: 0.0001
 
