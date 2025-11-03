@@ -150,9 +150,15 @@ class PCQM4Mv2Wrapper(Dataset):
             data = self.transform(data)
 
         # ターゲット（HOMO-LUMO gap）
-        target = data.y if hasattr(data, 'y') and data.y is not None else torch.tensor([0.0])
+        target = data.y if hasattr(data, 'y') and data.y is not None else 0.0
 
-        return data, target.float()
+        # targetがtensorでない場合はtensorに変換
+        if isinstance(target, torch.Tensor):
+            target = target.float()
+        else:
+            target = torch.tensor([target], dtype=torch.float32)
+
+        return data, target
 
 
 class PCQM4Mv2DataLoader:
