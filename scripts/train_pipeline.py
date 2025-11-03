@@ -83,13 +83,15 @@ class BitSpecPipeline:
             logger.info("This may take a while (dataset size: ~3.8 million molecules)")
 
             # データローダーを使用してダウンロードを実行
+            # キャッシュを無効化して高速化（存在確認のみ）
             _, _, _ = PCQM4Mv2DataLoader.create_dataloaders(
                 root=str(self.data_dir),
                 batch_size=1,  # ダウンロードのみなので小さいバッチサイズ
                 num_workers=0,
                 node_feature_dim=self.config['model']['node_features'],
                 edge_feature_dim=self.config['model']['edge_features'],
-                use_subset=100  # 最初の100サンプルだけロードして存在確認
+                use_subset=100,  # 最初の100サンプルだけロードして存在確認
+                use_cache=False  # ダウンロード確認時はキャッシュ不要
             )
 
             logger.info("✓ PCQM4Mv2 dataset downloaded successfully!")

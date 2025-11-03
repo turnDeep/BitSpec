@@ -31,7 +31,8 @@ class PCQM4Mv2Wrapper(Dataset):
         transform=None,
         node_feature_dim: int = 48,
         edge_feature_dim: int = 6,
-        use_cache: bool = True,
+        use_cache: bool = False,  # デフォルトをFalseに変更（オンデマンド処理でGPU利用を優先）
+        preload_cache: bool = False,  # 事前キャッシュするかどうか
     ):
         """
         Args:
@@ -40,7 +41,8 @@ class PCQM4Mv2Wrapper(Dataset):
             transform: データ変換関数
             node_feature_dim: ノード特徴量の次元（BitSpecに合わせる）
             edge_feature_dim: エッジ特徴量の次元（BitSpecに合わせる）
-            use_cache: 前処理したデータをキャッシュするか
+            use_cache: オンデマンドでキャッシュするか（メモリ効率的）
+            preload_cache: 起動時に全データを事前キャッシュするか（時間がかかる）
         """
         super().__init__()
         self.root = Path(root)
@@ -49,17 +51,21 @@ class PCQM4Mv2Wrapper(Dataset):
         self.node_feature_dim = node_feature_dim
         self.edge_feature_dim = edge_feature_dim
         self.use_cache = use_cache
+        self.preload_cache = preload_cache
 
         print(f"Loading PCQM4Mv2 dataset (split: {split})...")
         self.dataset = PCQM4Mv2(root=str(self.root), split=split)
         print(f"Loaded {len(self.dataset)} molecules")
 
-        # キャッシュの初期化
+        # キャッシュの初期化（オンデマンドキャッシング）
         self._cache = {} if use_cache else None
-        if use_cache:
-            print(f"Preprocessing and caching {split} data...")
+        if use_cache and preload_cache:
+            # 事前キャッシュは時間がかかるので、明示的に有効化した場合のみ
+            print(f"⚠️  Preloading cache for {split} data (this may take a while)...")
             self._preprocess_all()
             print(f"✓ Cache created for {len(self._cache)} samples")
+        elif use_cache:
+            print(f"✓ On-demand caching enabled (faster startup, cache builds during training)")
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -174,7 +180,8 @@ class PCQM4Mv2DataLoader:
         edge_feature_dim: int = 6,
         use_subset: Optional[int] = None,
         prefetch_factor: int = 2,
-        use_cache: bool = True,
+        use_cache: bool = False,  # デフォルトをFalseに変更
+        preload_cache: bool = False,  # 事前キャッシュのオプション追加
     ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
         訓練、検証、テストのデータローダーを作成
@@ -187,7 +194,8 @@ class PCQM4Mv2DataLoader:
             edge_feature_dim: エッジ特徴量の次元
             use_subset: サブセットのサイズ（テスト用、Noneで全データ）
             prefetch_factor: 各ワーカーの先読みバッチ数
-            use_cache: 前処理データをキャッシュするか
+            use_cache: オンデマンドでキャッシュするか
+            preload_cache: 起動時に全データを事前キャッシュするか
 
         Returns:
             train_loader, val_loader, test_loader
@@ -198,7 +206,8 @@ class PCQM4Mv2DataLoader:
             split='train',
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
-            use_cache=use_cache
+            use_cache=use_cache,
+            preload_cache=preload_cache
         )
 
         val_dataset = PCQM4Mv2Wrapper(
@@ -206,7 +215,8 @@ class PCQM4Mv2DataLoader:
             split='val',
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
-            use_cache=use_cache
+            use_cache=use_cache,
+            preload_cache=preload_cache
         )
 
         # テストデータセット（PCQM4Mv2にはtest-devとtest-challengeがある）
