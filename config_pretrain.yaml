@@ -45,9 +45,11 @@ pretraining:
   task: "homo_lumo_gap"  # homo_lumo_gap または multi_task
 
   # 訓練設定
-  batch_size: 256
+  batch_size: 512
   num_epochs: 100
-  num_workers: 4
+  num_workers: 12
+  prefetch_factor: 4
+  gradient_accumulation_steps: 2
   learning_rate: 0.001
   weight_decay: 0.0001
 
@@ -115,7 +117,7 @@ gpu:
   use_cuda: true
   device_ids: [0]
   mixed_precision: true
-  compile: false  # 事前学習では無効化（互換性のため）
+  compile: true  # torch.compileを有効化してパフォーマンス向上
   compile_mode: "reduce-overhead"
 
   # RTX 50シリーズ固有の設定
