@@ -102,11 +102,28 @@ class PretrainTrainer:
         self.task = task
 
         # torch.compileの適用（パフォーマンス最適化）
+        # 注意: PyTorch Geometricモデルはtorch.compileと相性が悪い場合がある
+        # 特にreduce-overheadモードは初回コンパイルに10-30分以上かかることがある
         if self.config.get('gpu', {}).get('compile', False):
             compile_mode = self.config.get('gpu', {}).get('compile_mode', 'reduce-overhead')
-            logger.info(f"Applying torch.compile with mode: {compile_mode}")
+            logger.info(f"torch.compile is enabled with mode: {compile_mode}")
+            logger.warning("⚠️  torch.compile with PyTorch Geometric can cause VERY LONG compilation times (10-30+ min)")
+            logger.warning("⚠️  If training appears frozen, it's likely compiling. Please wait or disable compile in config.")
+            logger.info("Starting torch.compile (this may take 10-30 minutes for the first batch)...")
+
+            # バックボーンのコンパイル
+            logger.info("Compiling backbone...")
             self.backbone = torch.compile(self.backbone, mode=compile_mode)
+            logger.info("✓ Backbone compiled")
+
+            # ヘッドのコンパイル
+            logger.info("Compiling pretrain head...")
             self.pretrain_head = torch.compile(self.pretrain_head, mode=compile_mode)
+            logger.info("✓ Pretrain head compiled")
+
+            logger.info("Note: Actual graph compilation will occur on first forward pass")
+        else:
+            logger.info("torch.compile is disabled - using eager execution")
 
         # オプティマイザ
         self.optimizer = AdamW(
@@ -153,6 +170,15 @@ class PretrainTrainer:
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
         for batch_idx, (graphs, targets) in enumerate(pbar):
             batch_start = time.time()
+
+            # 初回バッチのみ警告（torch.compileのコンパイルが発生）
+            if epoch == 1 and batch_idx == 0 and self.config.get('gpu', {}).get('compile', False):
+                logger.info("=" * 80)
+                logger.info("⚠️  FIRST BATCH - torch.compile will now compile the model")
+                logger.info("⚠️  This can take 10-30+ MINUTES. The progress bar will appear frozen.")
+                logger.info("⚠️  Please be patient - this is a one-time cost.")
+                logger.info("=" * 80)
+
             # データをデバイスに転送
             graphs = graphs.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
@@ -240,6 +266,14 @@ class PretrainTrainer:
             # バッチ処理時間の記録
             batch_time = time.time() - batch_start
             batch_times.append(batch_time)
+
+            # 初回バッチ完了時のメッセージ
+            if epoch == 1 and batch_idx == 0:
+                logger.info("=" * 80)
+                logger.info(f"✓ FIRST BATCH COMPLETED in {batch_time:.1f}s")
+                if self.config.get('gpu', {}).get('compile', False):
+                    logger.info("✓ torch.compile compilation finished! Subsequent batches will be much faster.")
+                logger.info("=" * 80)
 
             # GPU使用率の取得（10バッチごと）
             if batch_idx % 10 == 0 and torch.cuda.is_available():
