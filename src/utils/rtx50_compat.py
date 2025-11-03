@@ -132,6 +132,45 @@ def setup_gpu_environment(
     return device
 
 
+def setup_rtx50_compatibility(
+    device_id: int = 0,
+    force_sm90_emulation: bool = False,
+    mixed_precision: bool = True,
+    compile_model: bool = True,
+    compile_mode: str = "reduce-overhead",
+    verbose: bool = True
+) -> torch.device:
+    """
+    RTX 50互換性を設定してGPU環境をセットアップ
+
+    Args:
+        device_id: GPU ID
+        force_sm90_emulation: sm_90エミュレーションを強制するか
+        mixed_precision: 混合精度訓練を使用するか
+        compile_model: torch.compileを使用するか
+        compile_mode: コンパイルモード
+        verbose: ログを出力するか
+
+    Returns:
+        デバイス
+    """
+    # RTX 50互換性を有効化
+    enable_rtx50_compatibility(
+        force_sm90_emulation=force_sm90_emulation,
+        verbose=verbose
+    )
+
+    # GPU環境をセットアップ
+    device = setup_gpu_environment(
+        device_id=device_id,
+        mixed_precision=mixed_precision,
+        compile_model=compile_model,
+        compile_mode=compile_mode
+    )
+
+    return device
+
+
 def get_optimal_batch_size(
     model: torch.nn.Module,
     sample_input,
