@@ -51,7 +51,7 @@ pretraining:
   # - GPU使用率が低い場合: 段階的に増やす（768, 1024など）
   batch_size: 512  # 2048 → 512 (初回バッチ処理を高速化、安定性向上)
   num_epochs: 100
-  num_workers: 12  # 4 → 12 (GPU使用率最適化：データ供給を並列化)
+  num_workers: 8  # 4 → 8 (システム推奨値：安定性とパフォーマンスのバランス)
   prefetch_factor: 8  # 4 → 8 (GPU待機時間削減：バッファサイズを増加)
   gradient_accumulation_steps: 4  # 1 → 4 (実効バッチサイズ2048を維持)
   learning_rate: 0.001
