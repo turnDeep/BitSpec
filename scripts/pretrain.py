@@ -61,7 +61,8 @@ class PretrainTrainer:
             num_workers=self.config['pretraining'].get('num_workers', 4),
             node_feature_dim=self.config['model']['node_features'],
             edge_feature_dim=self.config['model']['edge_features'],
-            use_subset=self.config['pretraining'].get('use_subset', None)
+            use_subset=self.config['pretraining'].get('use_subset', None),
+            prefetch_factor=self.config['pretraining'].get('prefetch_factor', 2)
         )
 
         # GCNバックボーンの作成
@@ -99,6 +100,13 @@ class PretrainTrainer:
 
         self.task = task
 
+        # torch.compileの適用（パフォーマンス最適化）
+        if self.config.get('gpu', {}).get('compile', False):
+            compile_mode = self.config.get('gpu', {}).get('compile_mode', 'reduce-overhead')
+            logger.info(f"Applying torch.compile with mode: {compile_mode}")
+            self.backbone = torch.compile(self.backbone, mode=compile_mode)
+            self.pretrain_head = torch.compile(self.pretrain_head, mode=compile_mode)
+
         # オプティマイザ
         self.optimizer = AdamW(
             list(self.backbone.parameters()) + list(self.pretrain_head.parameters()),
@@ -124,6 +132,11 @@ class PretrainTrainer:
         self.best_val_loss = float('inf')
         self.best_model_path = None
 
+        # Gradient accumulation設定
+        self.gradient_accumulation_steps = self.config['pretraining'].get('gradient_accumulation_steps', 1)
+        logger.info(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
+        logger.info(f"Effective batch size: {self.config['pretraining']['batch_size'] * self.gradient_accumulation_steps}")
+
     def train_epoch(self, epoch: int) -> dict:
         """1エポックのトレーニング"""
         self.backbone.train()
@@ -134,8 +147,8 @@ class PretrainTrainer:
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
         for batch_idx, (graphs, targets) in enumerate(pbar):
             # データをデバイスに転送
-            graphs = graphs.to(self.device)
-            targets = targets.to(self.device)
+            graphs = graphs.to(self.device, non_blocking=True)
+            targets = targets.to(self.device, non_blocking=True)
 
             # NaN/Infのターゲットをスキップ
             valid_mask = torch.isfinite(targets)
@@ -145,8 +158,9 @@ class PretrainTrainer:
                 if targets.numel() == 0:
                     continue
 
-            # 勾配をゼロ化
-            self.optimizer.zero_grad()
+            # 勾配をゼロ化（gradient accumulationの最初のステップでのみ）
+            if batch_idx % self.gradient_accumulation_steps == 0:
+                self.optimizer.zero_grad()
 
             # Mixed Precision Training
             if self.scaler:
@@ -168,15 +182,21 @@ class PretrainTrainer:
                         # マルチタスク損失（ここではHOMO-LUMOのみ使用）
                         loss = F.mse_loss(homo_lumo.squeeze(), targets)
 
+                    # Gradient accumulationのためにlossをスケール
+                    loss = loss / self.gradient_accumulation_steps
+
                 # 逆伝播
                 self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    list(self.backbone.parameters()) + list(self.pretrain_head.parameters()),
-                    1.0
-                )
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+
+                # Gradient accumulationのステップに達したらオプティマイザを更新
+                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        list(self.backbone.parameters()) + list(self.pretrain_head.parameters()),
+                        1.0
+                    )
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
             else:
                 # GCNでグラフ表現を抽出
                 graph_features = self.backbone.extract_graph_features(graphs)
@@ -193,19 +213,25 @@ class PretrainTrainer:
                     homo_lumo, dipole, energy = self.pretrain_head(graph_features)
                     loss = F.mse_loss(homo_lumo.squeeze(), targets)
 
+                # Gradient accumulationのためにlossをスケール
+                loss = loss / self.gradient_accumulation_steps
+
                 # 逆伝播
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    list(self.backbone.parameters()) + list(self.pretrain_head.parameters()),
-                    1.0
-                )
-                self.optimizer.step()
 
-            total_loss += loss.item()
+                # Gradient accumulationのステップに達したらオプティマイザを更新
+                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        list(self.backbone.parameters()) + list(self.pretrain_head.parameters()),
+                        1.0
+                    )
+                    self.optimizer.step()
+
+            total_loss += loss.item() * self.gradient_accumulation_steps
             num_batches += 1
 
             # プログレスバーの更新
-            pbar.set_postfix({'loss': loss.item()})
+            pbar.set_postfix({'loss': loss.item() * self.gradient_accumulation_steps})
 
             # Weights & Biasesへのログ
             if self.config.get('pretraining', {}).get('use_wandb', False):
@@ -227,8 +253,8 @@ class PretrainTrainer:
 
         with torch.no_grad():
             for graphs, targets in tqdm(self.val_loader, desc="Validation"):
-                graphs = graphs.to(self.device)
-                targets = targets.to(self.device)
+                graphs = graphs.to(self.device, non_blocking=True)
+                targets = targets.to(self.device, non_blocking=True)
 
                 # NaN/Infのターゲットをスキップ
                 valid_mask = torch.isfinite(targets)

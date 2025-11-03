@@ -140,6 +140,7 @@ class PCQM4Mv2DataLoader:
         node_feature_dim: int = 48,
         edge_feature_dim: int = 6,
         use_subset: Optional[int] = None,
+        prefetch_factor: int = 2,
     ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
         訓練、検証、テストのデータローダーを作成
@@ -188,7 +189,8 @@ class PCQM4Mv2DataLoader:
             num_workers=num_workers,
             collate_fn=PCQM4Mv2DataLoader.collate_fn,
             pin_memory=True,
-            persistent_workers=num_workers > 0
+            persistent_workers=num_workers > 0,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
 
         val_loader = DataLoader(
@@ -198,7 +200,8 @@ class PCQM4Mv2DataLoader:
             num_workers=num_workers,
             collate_fn=PCQM4Mv2DataLoader.collate_fn,
             pin_memory=True,
-            persistent_workers=num_workers > 0
+            persistent_workers=num_workers > 0,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
 
         test_loader = DataLoader(
@@ -208,7 +211,8 @@ class PCQM4Mv2DataLoader:
             num_workers=num_workers,
             collate_fn=PCQM4Mv2DataLoader.collate_fn,
             pin_memory=True,
-            persistent_workers=num_workers > 0
+            persistent_workers=num_workers > 0,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
 
         return train_loader, val_loader, test_loader
