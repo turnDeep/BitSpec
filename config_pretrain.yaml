@@ -121,8 +121,10 @@ gpu:
   use_cuda: true
   device_ids: [0]
   mixed_precision: true
-  compile: true  # torch.compileを有効化してパフォーマンス向上
-  compile_mode: "reduce-overhead"
+  # torch.compile: PyTorch Geometricとの相性が悪く、初回バッチで10-30分以上フリーズする
+  # PyTorch Geometricは既に最適化されたCUDAカーネルを使用しているため、compileは不要
+  compile: false  # true にすると初回バッチが極めて遅くなる（10-30分以上）
+  compile_mode: "default"  # "reduce-overhead"は更に遅い。使う場合は"default"を推奨
 
   # RTX 50シリーズ固有の設定
   rtx50:
