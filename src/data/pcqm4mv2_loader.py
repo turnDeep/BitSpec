@@ -244,6 +244,10 @@ class PCQM4Mv2DataLoader:
             test_dataset = Subset(test_dataset, range(min(use_subset // 10, len(test_dataset))))
 
         # データローダーの作成
+        # CRITICAL FIX: persistent_workers=False to prevent HTTP 500 errors
+        # Issue: PCQM4Mv2 (OGB dataset) makes HTTP requests to remote servers
+        # With persistent_workers=True, worker processes retain HTTP connections
+        # across epochs, leading to timeouts and HTTP 500 errors on epoch 2+
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
@@ -251,7 +255,7 @@ class PCQM4Mv2DataLoader:
             num_workers=num_workers,
             collate_fn=PCQM4Mv2DataLoader.collate_fn,
             pin_memory=True,
-            persistent_workers=num_workers > 0,
+            persistent_workers=False,  # Changed from num_workers > 0 to False
             prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
 
@@ -262,7 +266,7 @@ class PCQM4Mv2DataLoader:
             num_workers=num_workers,
             collate_fn=PCQM4Mv2DataLoader.collate_fn,
             pin_memory=True,
-            persistent_workers=num_workers > 0,
+            persistent_workers=False,  # Changed from num_workers > 0 to False
             prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
 
@@ -273,7 +277,7 @@ class PCQM4Mv2DataLoader:
             num_workers=num_workers,
             collate_fn=PCQM4Mv2DataLoader.collate_fn,
             pin_memory=True,
-            persistent_workers=num_workers > 0,
+            persistent_workers=False,  # Changed from num_workers > 0 to False
             prefetch_factor=prefetch_factor if num_workers > 0 else None
         )
 
