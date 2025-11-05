@@ -177,11 +177,30 @@ class PCQM4Mv2DataLoader:
         """バッチ処理用のcollate関数"""
         graphs, targets = zip(*batch)
 
+        # 空のグラフや無効なデータをフィルタリング
+        valid_data = []
+        for graph, target in zip(graphs, targets):
+            # グラフが空でなく、ターゲットが有効な値であることを確認
+            if graph.x is not None and graph.x.shape[0] > 0 and torch.isfinite(target).all():
+                valid_data.append((graph, target))
+
+        # 有効なデータがない場合は空のバッチを返す（エラー回避）
+        if len(valid_data) == 0:
+            # ダミーのバッチを作成（実際には使用されない）
+            dummy_graph = graphs[0]
+            batched_graphs = Batch.from_data_list([dummy_graph])
+            batched_targets = torch.zeros(1, dtype=torch.float32)
+            return batched_graphs, batched_targets
+
+        # 有効なデータのみを使用
+        valid_graphs, valid_targets = zip(*valid_data)
+
         # グラフをバッチ化
-        batched_graphs = Batch.from_data_list(graphs)
+        batched_graphs = Batch.from_data_list(valid_graphs)
 
         # ターゲットをスタック
-        batched_targets = torch.stack([t if t.dim() > 0 else t.unsqueeze(0) for t in targets]).squeeze()
+        # Note: squeeze(-1)を使って最後の次元のみを削除（バッチ次元は保持）
+        batched_targets = torch.stack([t if t.dim() > 0 else t.unsqueeze(0) for t in valid_targets]).squeeze(-1)
 
         return batched_graphs, batched_targets
 

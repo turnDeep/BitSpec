@@ -227,11 +227,24 @@ class PretrainTrainer:
                         logger.info(f"   [3/5] Running prediction head...")
                     if self.task == 'homo_lumo_gap':
                         pred = self.pretrain_head(graph_features).squeeze()
+
+                        # バッチサイズ不一致チェック
+                        if pred.shape != targets.shape:
+                            logger.warning(f"Batch {batch_idx}: Size mismatch - pred: {pred.shape}, targets: {targets.shape}. Skipping batch.")
+                            continue
+
                         loss = F.mse_loss(pred, targets)
                     else:  # multi_task
                         homo_lumo, dipole, energy = self.pretrain_head(graph_features)
+                        homo_lumo_pred = homo_lumo.squeeze()
+
+                        # バッチサイズ不一致チェック
+                        if homo_lumo_pred.shape != targets.shape:
+                            logger.warning(f"Batch {batch_idx}: Size mismatch - pred: {homo_lumo_pred.shape}, targets: {targets.shape}. Skipping batch.")
+                            continue
+
                         # マルチタスク損失（ここではHOMO-LUMOのみ使用）
-                        loss = F.mse_loss(homo_lumo.squeeze(), targets)
+                        loss = F.mse_loss(homo_lumo_pred, targets)
                     if epoch == 1 and batch_idx == 0:
                         logger.info(f"   [3/5] ✓ Prediction completed ({time.time() - step_start:.2f}s)")
                         step_start = time.time()
@@ -267,10 +280,23 @@ class PretrainTrainer:
                 # ターゲット予測
                 if self.task == 'homo_lumo_gap':
                     pred = self.pretrain_head(graph_features).squeeze()
+
+                    # バッチサイズ不一致チェック
+                    if pred.shape != targets.shape:
+                        logger.warning(f"Batch {batch_idx}: Size mismatch - pred: {pred.shape}, targets: {targets.shape}. Skipping batch.")
+                        continue
+
                     loss = F.mse_loss(pred, targets)
                 else:  # multi_task
                     homo_lumo, dipole, energy = self.pretrain_head(graph_features)
-                    loss = F.mse_loss(homo_lumo.squeeze(), targets)
+                    homo_lumo_pred = homo_lumo.squeeze()
+
+                    # バッチサイズ不一致チェック
+                    if homo_lumo_pred.shape != targets.shape:
+                        logger.warning(f"Batch {batch_idx}: Size mismatch - pred: {homo_lumo_pred.shape}, targets: {targets.shape}. Skipping batch.")
+                        continue
+
+                    loss = F.mse_loss(homo_lumo_pred, targets)
 
                 # Gradient accumulationのためにlossをスケール
                 loss = loss / self.gradient_accumulation_steps
@@ -369,19 +395,45 @@ class PretrainTrainer:
 
                         if self.task == 'homo_lumo_gap':
                             pred = self.pretrain_head(graph_features).squeeze()
+
+                            # バッチサイズ不一致チェック
+                            if pred.shape != targets.shape:
+                                logger.warning(f"Validation: Size mismatch - pred: {pred.shape}, targets: {targets.shape}. Skipping batch.")
+                                continue
+
                             loss = F.mse_loss(pred, targets)
                         else:  # multi_task
                             homo_lumo, dipole, energy = self.pretrain_head(graph_features)
-                            loss = F.mse_loss(homo_lumo.squeeze(), targets)
+                            homo_lumo_pred = homo_lumo.squeeze()
+
+                            # バッチサイズ不一致チェック
+                            if homo_lumo_pred.shape != targets.shape:
+                                logger.warning(f"Validation: Size mismatch - pred: {homo_lumo_pred.shape}, targets: {targets.shape}. Skipping batch.")
+                                continue
+
+                            loss = F.mse_loss(homo_lumo_pred, targets)
                 else:
                     graph_features = self.backbone.extract_graph_features(graphs)
 
                     if self.task == 'homo_lumo_gap':
                         pred = self.pretrain_head(graph_features).squeeze()
+
+                        # バッチサイズ不一致チェック
+                        if pred.shape != targets.shape:
+                            logger.warning(f"Validation: Size mismatch - pred: {pred.shape}, targets: {targets.shape}. Skipping batch.")
+                            continue
+
                         loss = F.mse_loss(pred, targets)
                     else:  # multi_task
                         homo_lumo, dipole, energy = self.pretrain_head(graph_features)
-                        loss = F.mse_loss(homo_lumo.squeeze(), targets)
+                        homo_lumo_pred = homo_lumo.squeeze()
+
+                        # バッチサイズ不一致チェック
+                        if homo_lumo_pred.shape != targets.shape:
+                            logger.warning(f"Validation: Size mismatch - pred: {homo_lumo_pred.shape}, targets: {targets.shape}. Skipping batch.")
+                            continue
+
+                        loss = F.mse_loss(homo_lumo_pred, targets)
 
                 total_loss += loss.item()
                 num_batches += 1
