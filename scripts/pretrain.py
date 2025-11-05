@@ -198,13 +198,14 @@ class PretrainTrainer:
                 logger.info(f"   [1/5] ✓ Data transferred ({time.time() - step_start:.2f}s)")
                 step_start = time.time()
 
-            # NaN/Infのターゲットをスキップ
+            # NaN/Infチェック - 無効なサンプルがある場合はバッチ全体をスキップ
             valid_mask = torch.isfinite(targets)
-            if not valid_mask.all():
-                graphs = graphs
-                targets = targets[valid_mask]
-                if targets.numel() == 0:
-                    continue
+            num_invalid = (~valid_mask).sum().item()
+
+            if num_invalid > 0:
+                # 無効なサンプルがある場合は警告を出してバッチ全体をスキップ
+                logger.warning(f"Batch {batch_idx}: Skipping {num_invalid}/{len(targets)} invalid targets")
+                continue
 
             # 勾配をゼロ化（gradient accumulationの最初のステップでのみ）
             if batch_idx % self.gradient_accumulation_steps == 0:
@@ -226,12 +227,7 @@ class PretrainTrainer:
                         logger.info(f"   [3/5] Running prediction head...")
                     if self.task == 'homo_lumo_gap':
                         pred = self.pretrain_head(graph_features).squeeze()
-                        # valid_maskでフィルタリング
-                        if valid_mask.all():
-                            loss = F.mse_loss(pred, targets)
-                        else:
-                            pred = pred[valid_mask]
-                            loss = F.mse_loss(pred, targets)
+                        loss = F.mse_loss(pred, targets)
                     else:  # multi_task
                         homo_lumo, dipole, energy = self.pretrain_head(graph_features)
                         # マルチタスク損失（ここではHOMO-LUMOのみ使用）
@@ -271,11 +267,7 @@ class PretrainTrainer:
                 # ターゲット予測
                 if self.task == 'homo_lumo_gap':
                     pred = self.pretrain_head(graph_features).squeeze()
-                    if valid_mask.all():
-                        loss = F.mse_loss(pred, targets)
-                    else:
-                        pred = pred[valid_mask]
-                        loss = F.mse_loss(pred, targets)
+                    loss = F.mse_loss(pred, targets)
                 else:  # multi_task
                     homo_lumo, dipole, energy = self.pretrain_head(graph_features)
                     loss = F.mse_loss(homo_lumo.squeeze(), targets)
@@ -362,12 +354,13 @@ class PretrainTrainer:
                 graphs = graphs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
 
-                # NaN/Infのターゲットをスキップ
+                # NaN/Infチェック - 無効なサンプルがある場合はバッチ全体をスキップ
                 valid_mask = torch.isfinite(targets)
-                if not valid_mask.all():
-                    targets = targets[valid_mask]
-                    if targets.numel() == 0:
-                        continue
+                num_invalid = (~valid_mask).sum().item()
+
+                if num_invalid > 0:
+                    # 無効なサンプルがあるバッチはスキップ
+                    continue
 
                 # 予測
                 if self.scaler:
@@ -376,11 +369,7 @@ class PretrainTrainer:
 
                         if self.task == 'homo_lumo_gap':
                             pred = self.pretrain_head(graph_features).squeeze()
-                            if valid_mask.all():
-                                loss = F.mse_loss(pred, targets)
-                            else:
-                                pred = pred[valid_mask]
-                                loss = F.mse_loss(pred, targets)
+                            loss = F.mse_loss(pred, targets)
                         else:  # multi_task
                             homo_lumo, dipole, energy = self.pretrain_head(graph_features)
                             loss = F.mse_loss(homo_lumo.squeeze(), targets)
@@ -389,11 +378,7 @@ class PretrainTrainer:
 
                     if self.task == 'homo_lumo_gap':
                         pred = self.pretrain_head(graph_features).squeeze()
-                        if valid_mask.all():
-                            loss = F.mse_loss(pred, targets)
-                        else:
-                            pred = pred[valid_mask]
-                            loss = F.mse_loss(pred, targets)
+                        loss = F.mse_loss(pred, targets)
                     else:  # multi_task
                         homo_lumo, dipole, energy = self.pretrain_head(graph_features)
                         loss = F.mse_loss(homo_lumo.squeeze(), targets)
