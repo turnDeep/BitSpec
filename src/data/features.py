@@ -22,7 +22,7 @@ class MolecularFeaturizer:
         'formal_charge': [-3, -2, -1, 0, 1, 2, 3],
         'chiral_tag': [0, 1, 2, 3],
         'num_Hs': [0, 1, 2, 3, 4],
-        'hybridization': [0, 1, 2, 3, 4, 5, 6],
+        'hybridization': [0, 1, 2, 3, 4, 5],  # 6を削除して48次元に調整
     }
     
     # 結合の特徴量
@@ -90,7 +90,7 @@ class MolecularFeaturizer:
             self.ATOM_FEATURES['num_Hs']
         )
         
-        # 混成軌道 (7次元)
+        # 混成軌道 (7次元) ※6要素 + unknown = 7次元
         features += self.one_hot_encoding(
             int(atom.GetHybridization()),
             self.ATOM_FEATURES['hybridization']
