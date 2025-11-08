@@ -1,4 +1,7 @@
 # scripts/predict.py
+import matplotlib
+matplotlib.use('Agg')  # ヘッドレス環境用のバックエンドを設定（X11不要）
+
 import torch
 import yaml
 from pathlib import Path
