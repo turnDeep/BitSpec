@@ -1,4 +1,11 @@
 # scripts/predict.py
+import os
+import sys
+
+# ヘッドレス環境用の環境変数設定（RDKitのX11依存を回避）
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+os.environ['MPLBACKEND'] = 'Agg'
+
 import matplotlib
 matplotlib.use('Agg')  # ヘッドレス環境用のバックエンドを設定（X11不要）
 
@@ -7,10 +14,12 @@ import yaml
 from pathlib import Path
 import logging
 from rdkit import Chem
-from rdkit.Chem import AllChem, Draw
+from rdkit.Chem import AllChem
 import matplotlib.pyplot as plt
 import numpy as np
-import sys
+from io import BytesIO
+from PIL import Image
+
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.gcn_model import MassSpectrumGCN
@@ -158,11 +167,11 @@ class MassSpectrumPredictor:
         
         return pred_spectra.cpu().numpy()
     
-    def visualize_prediction(self, smiles: str, true_spectrum: np.ndarray = None, 
+    def visualize_prediction(self, smiles: str, true_spectrum: np.ndarray = None,
                            save_path: str = None):
         """
         予測結果の可視化
-        
+
         Args:
             smiles: SMILES文字列
             true_spectrum: 真のスペクトル（オプション）
@@ -170,15 +179,51 @@ class MassSpectrumPredictor:
         """
         # 予測
         pred_spectrum = self.predict_from_smiles(smiles)
-        
+
         # 分子構造の描画
         mol = Chem.MolFromSmiles(smiles)
-        
+
         fig = plt.figure(figsize=(15, 10))
-        
-        # 分子構造
+
+        # 分子構造（ヘッドレス環境対応）
         ax1 = plt.subplot(2, 1, 1)
-        img = Draw.MolToImage(mol, size=(400, 400))
+        img = None
+
+        # 複数の描画方法を試す（ヘッドレス環境対応）
+        try:
+            # 方法1: rdMolDraw2D (PNG) - X11不要
+            from rdkit.Chem.Draw import rdMolDraw2D
+            drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
+            drawer.DrawMolecule(mol)
+            drawer.FinishDrawing()
+            img_data = drawer.GetDrawingText()
+            img = Image.open(BytesIO(img_data))
+            logger.debug("Drew molecule using MolDraw2DCairo")
+        except Exception as e1:
+            logger.debug(f"MolDraw2DCairo failed: {e1}")
+            try:
+                # 方法2: SVGベースの描画
+                from rdkit.Chem.Draw import rdMolDraw2D
+                drawer = rdMolDraw2D.MolDraw2DSVG(400, 400)
+                drawer.DrawMolecule(mol)
+                drawer.FinishDrawing()
+                svg_data = drawer.GetDrawingText()
+                # SVGをPNGに変換（cairosvgが必要だが、なければスキップ）
+                try:
+                    import cairosvg
+                    png_data = cairosvg.svg2png(bytestring=svg_data.encode('utf-8'))
+                    img = Image.open(BytesIO(png_data))
+                    logger.debug("Drew molecule using SVG")
+                except ImportError:
+                    logger.debug("cairosvg not available, skipping SVG rendering")
+            except Exception as e2:
+                logger.debug(f"SVG drawing failed: {e2}")
+
+        # フォールバック: 分子構造なしでSMILES文字列のみ表示
+        if img is None:
+            logger.warning("Could not draw molecule structure, using text only")
+            img = Image.new('RGB', (400, 400), color='white')
+
         ax1.imshow(img)
         ax1.axis('off')
         ax1.set_title(f'Molecule: {smiles}', fontsize=12, pad=10)
