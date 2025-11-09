@@ -123,12 +123,21 @@ def setup_gpu_environment(
     
     # cuDNNベンチマークモード
     torch.backends.cudnn.benchmark = True
-    
-    # TF32を有効化（Ampere以降）
+
+    # TF32を有効化（Ampere以降）- 新しいPyTorch 2.9+ API
     if capability[0] >= 8:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-    
+        # 新しいAPI（PyTorch 2.9+で推奨）
+        try:
+            torch.set_float32_matmul_precision('high')  # 'high' = TF32を使用
+            if hasattr(torch.backends.cudnn.conv, 'fp32_precision'):
+                torch.backends.cudnn.conv.fp32_precision = 'tf32'
+            if hasattr(torch.backends.cuda.matmul, 'fp32_precision'):
+                torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        except (AttributeError, RuntimeError):
+            # 古いPyTorchバージョンの場合はフォールバック
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
     return device
 
 

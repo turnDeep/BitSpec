@@ -138,8 +138,9 @@ class MassSpectrumPredictor:
         if mol is None:
             raise ValueError(f"Invalid SMILES: {smiles}")
 
-        # 3D座標の生成
+        # 3D座標の生成（明示的水素を追加してから）
         try:
+            mol = Chem.AddHs(mol)
             AllChem.EmbedMolecule(mol, randomSeed=42)
             AllChem.MMFFOptimizeMolecule(mol)
         except:
@@ -202,6 +203,7 @@ class MassSpectrumPredictor:
                 continue
             
             try:
+                mol = Chem.AddHs(mol)
                 AllChem.EmbedMolecule(mol, randomSeed=42)
                 AllChem.MMFFOptimizeMolecule(mol)
             except:
@@ -241,6 +243,10 @@ class MassSpectrumPredictor:
 
         # 分子構造の描画
         mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES: {smiles}")
+        # 描画用に明示的水素を追加（警告を抑制）
+        mol_with_h = Chem.AddHs(mol)
 
         fig = plt.figure(figsize=(15, 10))
 
@@ -253,7 +259,7 @@ class MassSpectrumPredictor:
             # 方法1: rdMolDraw2D (PNG) - X11不要
             from rdkit.Chem.Draw import rdMolDraw2D
             drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
-            drawer.DrawMolecule(mol)
+            drawer.DrawMolecule(mol_with_h)
             drawer.FinishDrawing()
             img_data = drawer.GetDrawingText()
             img = Image.open(BytesIO(img_data))
@@ -264,7 +270,7 @@ class MassSpectrumPredictor:
                 # 方法2: SVGベースの描画
                 from rdkit.Chem.Draw import rdMolDraw2D
                 drawer = rdMolDraw2D.MolDraw2DSVG(400, 400)
-                drawer.DrawMolecule(mol)
+                drawer.DrawMolecule(mol_with_h)
                 drawer.FinishDrawing()
                 svg_data = drawer.GetDrawingText()
                 # SVGをPNGに変換（cairosvgが必要だが、なければスキップ）
@@ -322,8 +328,9 @@ class MassSpectrumPredictor:
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Saved visualization to {save_path}")
-        
-        plt.show()
+
+        # Non-interactive environment - don't call plt.show()
+        plt.close(fig)
     
     def find_significant_peaks(self, spectrum: np.ndarray,
                              threshold: float = 0.05,
