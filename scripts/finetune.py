@@ -93,7 +93,7 @@ class FinetuneTrainer:
         pretrained_checkpoint = self.config.get('finetuning', {}).get('pretrained_checkpoint', None)
         if pretrained_checkpoint and Path(pretrained_checkpoint).exists():
             logger.info(f"Loading pretrained checkpoint from {pretrained_checkpoint}")
-            checkpoint = torch.load(pretrained_checkpoint, map_location=self.device)
+            checkpoint = torch.load(pretrained_checkpoint, map_location=self.device, weights_only=False)
 
             # バックボーンの重みをロード
             if 'backbone_state_dict' in checkpoint:
