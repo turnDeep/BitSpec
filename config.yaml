@@ -22,12 +22,12 @@ data:
 # モデル設定
 model:
   type: "GCN"  # GCN, GAT, GraphTransformer
-  node_features: 157  # 原子特徴量の次元
-  edge_features: 16   # 結合特徴量の次元
+  node_features: 48  # 原子特徴量の次元 (features.pyに合わせて修正)
+  edge_features: 6   # 結合特徴量の次元 (features.pyに合わせて修正)
   hidden_dim: 256
   num_layers: 5
   dropout: 0.1
-  pooling: "attention"  # mean, max, attention
+  pooling: "mean"  # mean, max, attention (チェックポイント互換のためmeanに変更)
   
   # GCN固有の設定
   gcn:
