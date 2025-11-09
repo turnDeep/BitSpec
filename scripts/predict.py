@@ -60,7 +60,7 @@ class MassSpectrumPredictor:
         ).to(self.device)
 
         # チェックポイントの読み込み
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
 
