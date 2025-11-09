@@ -343,21 +343,30 @@ class MassSpectrumPredictor:
         spectrum = np.atleast_1d(spectrum).flatten()
 
         # 閾値以上のピークを検出
-        peak_indices = np.where(spectrum > threshold)[0]
-        peak_intensities = spectrum[peak_indices]
+        peak_mask = spectrum > threshold
+        peak_indices = np.where(peak_mask)[0]
 
         # ピークが見つからない場合
         if len(peak_indices) == 0:
             logger.warning("No peaks found above threshold")
             return []
 
-        # 強度でソート
-        sorted_idx = np.argsort(peak_intensities)[::-1]
+        # ピーク位置での強度を取得
+        peak_intensities = spectrum[peak_indices]
 
-        # 上位N個を取得（実際のピーク数とtop_nの小さい方）
-        n_peaks = min(len(peak_indices), top_n)
-        top_peaks = [(int(peak_indices[sorted_idx[i]]), float(peak_intensities[sorted_idx[i]]))
-                     for i in range(n_peaks)]
+        # 強度でソート（降順）
+        sorted_order = np.argsort(peak_intensities)[::-1]
+
+        # 上位N個を取得
+        n_peaks = min(len(sorted_order), top_n)
+
+        # ソート済みのインデックスを使って、元のm/z位置と強度を取得
+        top_peaks = []
+        for i in range(n_peaks):
+            idx = sorted_order[i]  # peak_intensities内でのインデックス
+            mz = int(peak_indices[idx])  # 元のスペクトル内でのm/z位置
+            intensity = float(peak_intensities[idx])  # その位置での強度
+            top_peaks.append((mz, intensity))
 
         return top_peaks
     
