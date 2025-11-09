@@ -41,11 +41,14 @@ class MassSpectrumPredictor:
         # 設定の読み込み
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
-        
+
         # デバイス設定
         self.device = setup_rtx50_compatibility()
         logger.info(f"Using device: {self.device}")
-        
+
+        # チェックポイントパスの検証と自動検出
+        checkpoint_path = self._find_checkpoint(checkpoint_path)
+
         # モデルの読み込み
         self.model = GCNMassSpecPredictor(
             node_features=self.config['model']['node_features'],
@@ -55,19 +58,65 @@ class MassSpectrumPredictor:
             spectrum_dim=self.config['data']['max_mz'],
             dropout=self.config['model']['dropout']
         ).to(self.device)
-        
+
         # チェックポイントの読み込み
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
-        
+
         logger.info(f"Loaded model from {checkpoint_path}")
         logger.info(f"Model trained for {checkpoint['epoch']} epochs")
-        
+
         # 特徴量化器
         self.featurizer = MolecularFeaturizer()
-        
+
         self.max_mz = self.config['data']['max_mz']
+
+    def _find_checkpoint(self, checkpoint_path: str) -> str:
+        """
+        チェックポイントファイルを探す
+
+        Args:
+            checkpoint_path: ユーザー指定のチェックポイントパス
+
+        Returns:
+            実際に存在するチェックポイントパス
+
+        Raises:
+            FileNotFoundError: チェックポイントが見つからない場合
+        """
+        # パスのリストを作成（優先順位順）
+        candidate_paths = [
+            checkpoint_path,  # ユーザー指定のパス
+            "checkpoints/finetune/best_finetuned_model.pt",  # ファインチューニング後のベストモデル
+            "checkpoints/pretrain/pretrained_backbone.pt",  # 事前学習済みバックボーン
+            "checkpoints/best_model.pt",  # 旧形式
+            "/workspace/checkpoints/finetune/best_finetuned_model.pt",  # Dockerコンテナ内
+            "/workspace/checkpoints/best_model.pt",  # Dockerコンテナ内（旧形式）
+        ]
+
+        # 絶対パスに変換して検索
+        for path_str in candidate_paths:
+            path = Path(path_str)
+            if path.exists():
+                logger.info(f"Found checkpoint at: {path}")
+                return str(path)
+
+        # どこにも見つからない場合はエラー
+        error_msg = (
+            f"チェックポイントファイルが見つかりません。\n"
+            f"以下の場所を確認しました:\n"
+        )
+        for path in candidate_paths:
+            error_msg += f"  - {path}\n"
+        error_msg += (
+            f"\n解決方法:\n"
+            f"1. モデルのトレーニングを実行してください:\n"
+            f"   python scripts/pretrain.py --config config_pretrain.yaml\n"
+            f"   python scripts/finetune.py --config config_pretrain.yaml\n"
+            f"2. または、正しいチェックポイントパスを --checkpoint オプションで指定してください\n"
+        )
+        raise FileNotFoundError(error_msg)
     
     def predict_from_smiles(self, smiles: str) -> np.ndarray:
         """
