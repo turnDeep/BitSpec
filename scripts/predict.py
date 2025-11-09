@@ -22,7 +22,7 @@ from PIL import Image
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.models.gcn_model import MassSpectrumGCN
+from src.models.gcn_model import GCNMassSpecPredictor
 from src.features.molecular_features import MolecularFeaturizer
 from src.utils.rtx50_compat import setup_rtx50_compatibility
 
@@ -47,12 +47,12 @@ class MassSpectrumPredictor:
         logger.info(f"Using device: {self.device}")
         
         # モデルの読み込み
-        self.model = MassSpectrumGCN(
+        self.model = GCNMassSpecPredictor(
             node_features=self.config['model']['node_features'],
             edge_features=self.config['model']['edge_features'],
             hidden_dim=self.config['model']['hidden_dim'],
             num_layers=self.config['model']['num_layers'],
-            output_dim=self.config['data']['max_mz'],
+            spectrum_dim=self.config['data']['max_mz'],
             dropout=self.config['model']['dropout']
         ).to(self.device)
         
