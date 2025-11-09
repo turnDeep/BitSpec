@@ -87,19 +87,21 @@ finetuning:
   freeze_backbone: false  # true: バックボーン全体を凍結
   freeze_layers: 0        # 下位N層を凍結（0で凍結なし）
 
-  # 異なる学習率
-  backbone_lr: 0.0001     # 事前学習済み層は低学習率
+  # 異なる学習率（30万化合物用に最適化）
+  backbone_lr: 0.00005    # 事前学習済み層は低学習率（より慎重に）
   head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
   learning_rate: 0.001    # デフォルト学習率
 
-  # 訓練設定
-  batch_size: 32
-  num_epochs: 200
-  num_workers: 4
+  # 訓練設定（30万化合物用に最適化）
+  batch_size: 64          # 32 → 64（RTX 5070 Ti 16GB最適化）
+  num_epochs: 50          # 200 → 50（大規模データセット用）
+  num_workers: 6          # 4 → 6（データ読み込み高速化）
+  prefetch_factor: 2      # データ先読み設定
+  gradient_accumulation_steps: 1  # 必要に応じて2に変更
   weight_decay: 0.0001
 
-  # スケジューラ
-  scheduler_t0: 10
+  # スケジューラ（大規模データ用に調整）
+  scheduler_t0: 5         # 10 → 5（短いサイクル）
   scheduler_tmult: 2
 
   # 混合精度訓練
@@ -110,11 +112,11 @@ finetuning:
 
   # 保存設定
   checkpoint_dir: "checkpoints/finetune"
-  save_interval: 10
+  save_interval: 5        # 10 → 5（定期的な保存）
 
-  # Weights & Biases
-  use_wandb: false
-  wandb_project: "bitspec-finetuning"
+  # Weights & Biases（学習曲線の監視を推奨）
+  use_wandb: true         # false → true（大規模学習の監視）
+  wandb_project: "bitspec-finetuning-300k"
 
 # GPU設定 (RTX 50シリーズ対応)
 gpu:
