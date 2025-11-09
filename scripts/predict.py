@@ -126,10 +126,10 @@ class MassSpectrumPredictor:
     def predict_from_smiles(self, smiles: str) -> np.ndarray:
         """
         SMILESから質量スペクトルを予測
-        
+
         Args:
             smiles: SMILES文字列
-            
+
         Returns:
             予測スペクトル (max_mz,)
         """
@@ -137,18 +137,18 @@ class MassSpectrumPredictor:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             raise ValueError(f"Invalid SMILES: {smiles}")
-        
+
         # 3D座標の生成
         try:
             AllChem.EmbedMolecule(mol, randomSeed=42)
             AllChem.MMFFOptimizeMolecule(mol)
         except:
             logger.warning("Could not generate 3D coordinates")
-        
+
         # 分子グラフの特徴量化
         graph_data = self.featurizer.mol_to_graph(mol)
         graph_data = graph_data.to(self.device)
-        
+
         # 予測
         with torch.no_grad():
             if self.config['training']['use_amp']:
@@ -156,8 +156,13 @@ class MassSpectrumPredictor:
                     pred_spectrum = self.model(graph_data)
             else:
                 pred_spectrum = self.model(graph_data)
-        
-        return pred_spectrum.cpu().numpy()
+
+        # NumPy配列に変換し、バッチ次元を削除
+        result = pred_spectrum.cpu().numpy()
+        # 2次元以上の場合は1次元にする
+        if result.ndim > 1:
+            result = result.squeeze()
+        return result
     
     def predict_from_mol_file(self, mol_path: str) -> np.ndarray:
         """
@@ -320,31 +325,40 @@ class MassSpectrumPredictor:
         
         plt.show()
     
-    def find_significant_peaks(self, spectrum: np.ndarray, 
+    def find_significant_peaks(self, spectrum: np.ndarray,
                              threshold: float = 0.05,
                              top_n: int = 20) -> list:
         """
         有意なピークを検出
-        
+
         Args:
             spectrum: スペクトルデータ
             threshold: 強度の閾値
             top_n: 上位N個のピーク
-            
+
         Returns:
             [(mz, intensity), ...] のリスト
         """
+        # 配列を1次元にフラット化
+        spectrum = np.atleast_1d(spectrum).flatten()
+
         # 閾値以上のピークを検出
         peak_indices = np.where(spectrum > threshold)[0]
         peak_intensities = spectrum[peak_indices]
-        
+
+        # ピークが見つからない場合
+        if len(peak_indices) == 0:
+            logger.warning("No peaks found above threshold")
+            return []
+
         # 強度でソート
         sorted_idx = np.argsort(peak_intensities)[::-1]
-        
-        # 上位N個を取得
-        top_peaks = [(int(peak_indices[i]), float(peak_intensities[i])) 
-                     for i in sorted_idx[:top_n]]
-        
+
+        # 上位N個を取得（実際のピーク数とtop_nの小さい方）
+        n_peaks = min(len(peak_indices), top_n)
+        top_peaks = [(int(peak_indices[sorted_idx[i]]), float(peak_intensities[sorted_idx[i]]))
+                     for i in range(n_peaks)]
+
         return top_peaks
     
     def export_to_msp(self, smiles: str, output_path: str, 
