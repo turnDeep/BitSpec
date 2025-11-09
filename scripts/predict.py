@@ -15,10 +15,15 @@ from pathlib import Path
 import logging
 from rdkit import Chem
 from rdkit.Chem import AllChem
+from rdkit import RDLogger
 import matplotlib.pyplot as plt
 import numpy as np
 from io import BytesIO
 from PIL import Image
+import warnings
+
+# RDKitの警告を抑制
+RDLogger.DisableLog('rdApp.*')
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -238,99 +243,104 @@ class MassSpectrumPredictor:
             true_spectrum: 真のスペクトル（オプション）
             save_path: 保存先パス（オプション）
         """
-        # 予測
-        pred_spectrum = self.predict_from_smiles(smiles)
+        # matplotlibの警告を抑制
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=UserWarning, message='.*non-interactive.*')
+            warnings.filterwarnings('ignore', category=UserWarning, message='.*FigureCanvasAgg.*')
 
-        # 分子構造の描画
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            raise ValueError(f"Invalid SMILES: {smiles}")
-        # 描画用に明示的水素を追加（警告を抑制）
-        mol_with_h = Chem.AddHs(mol)
+            # 予測
+            pred_spectrum = self.predict_from_smiles(smiles)
 
-        fig = plt.figure(figsize=(15, 10))
+            # 分子構造の描画
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                raise ValueError(f"Invalid SMILES: {smiles}")
+            # 描画用に明示的水素を追加
+            mol_with_h = Chem.AddHs(mol)
 
-        # 分子構造（ヘッドレス環境対応）
-        ax1 = plt.subplot(2, 1, 1)
-        img = None
+            fig = plt.figure(figsize=(15, 10))
 
-        # 複数の描画方法を試す（ヘッドレス環境対応）
-        try:
-            # 方法1: rdMolDraw2D (PNG) - X11不要
-            from rdkit.Chem.Draw import rdMolDraw2D
-            drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
-            drawer.DrawMolecule(mol_with_h)
-            drawer.FinishDrawing()
-            img_data = drawer.GetDrawingText()
-            img = Image.open(BytesIO(img_data))
-            logger.debug("Drew molecule using MolDraw2DCairo")
-        except Exception as e1:
-            logger.debug(f"MolDraw2DCairo failed: {e1}")
+            # 分子構造（ヘッドレス環境対応）
+            ax1 = plt.subplot(2, 1, 1)
+            img = None
+
+            # 複数の描画方法を試す（ヘッドレス環境対応）
             try:
-                # 方法2: SVGベースの描画
+                # 方法1: rdMolDraw2D (PNG) - X11不要
                 from rdkit.Chem.Draw import rdMolDraw2D
-                drawer = rdMolDraw2D.MolDraw2DSVG(400, 400)
+                drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
                 drawer.DrawMolecule(mol_with_h)
                 drawer.FinishDrawing()
-                svg_data = drawer.GetDrawingText()
-                # SVGをPNGに変換（cairosvgが必要だが、なければスキップ）
+                img_data = drawer.GetDrawingText()
+                img = Image.open(BytesIO(img_data))
+                logger.debug("Drew molecule using MolDraw2DCairo")
+            except Exception as e1:
+                logger.debug(f"MolDraw2DCairo failed: {e1}")
                 try:
-                    import cairosvg
-                    png_data = cairosvg.svg2png(bytestring=svg_data.encode('utf-8'))
-                    img = Image.open(BytesIO(png_data))
-                    logger.debug("Drew molecule using SVG")
-                except ImportError:
-                    logger.debug("cairosvg not available, skipping SVG rendering")
-            except Exception as e2:
-                logger.debug(f"SVG drawing failed: {e2}")
+                    # 方法2: SVGベースの描画
+                    from rdkit.Chem.Draw import rdMolDraw2D
+                    drawer = rdMolDraw2D.MolDraw2DSVG(400, 400)
+                    drawer.DrawMolecule(mol_with_h)
+                    drawer.FinishDrawing()
+                    svg_data = drawer.GetDrawingText()
+                    # SVGをPNGに変換（cairosvgが必要だが、なければスキップ）
+                    try:
+                        import cairosvg
+                        png_data = cairosvg.svg2png(bytestring=svg_data.encode('utf-8'))
+                        img = Image.open(BytesIO(png_data))
+                        logger.debug("Drew molecule using SVG")
+                    except ImportError:
+                        logger.debug("cairosvg not available, skipping SVG rendering")
+                except Exception as e2:
+                    logger.debug(f"SVG drawing failed: {e2}")
 
-        # フォールバック: 分子構造なしでSMILES文字列のみ表示
-        if img is None:
-            logger.warning("Could not draw molecule structure, using text only")
-            img = Image.new('RGB', (400, 400), color='white')
+            # フォールバック: 分子構造なしでSMILES文字列のみ表示
+            if img is None:
+                logger.warning("Could not draw molecule structure, using text only")
+                img = Image.new('RGB', (400, 400), color='white')
 
-        ax1.imshow(img)
-        ax1.axis('off')
-        ax1.set_title(f'Molecule: {smiles}', fontsize=12, pad=10)
-        
-        # スペクトル
-        ax2 = plt.subplot(2, 1, 2)
-        
-        mz_values = np.arange(self.max_mz)
-        
-        # 予測スペクトル
-        ax2.stem(mz_values, pred_spectrum, linefmt='b-', markerfmt='bo', 
-                basefmt=' ', label='Predicted')
-        
-        # 真のスペクトル（あれば）
-        if true_spectrum is not None:
-            ax2.stem(mz_values, true_spectrum, linefmt='r-', markerfmt='ro', 
-                    basefmt=' ', label='True', alpha=0.5)
-            
-            # 類似度の計算
-            cosine_sim = np.dot(pred_spectrum, true_spectrum) / \
-                        (np.linalg.norm(pred_spectrum) * np.linalg.norm(true_spectrum))
-            ax2.text(0.02, 0.98, f'Cosine Similarity: {cosine_sim:.4f}',
-                    transform=ax2.transAxes, fontsize=12,
-                    verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        ax2.set_xlabel('m/z', fontsize=12)
-        ax2.set_ylabel('Relative Intensity', fontsize=12)
-        ax2.set_title('Mass Spectrum', fontsize=14, pad=10)
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        ax2.set_xlim(0, self.max_mz)
-        ax2.set_ylim(0, 1.05)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            logger.info(f"Saved visualization to {save_path}")
+            ax1.imshow(img)
+            ax1.axis('off')
+            ax1.set_title(f'Molecule: {smiles}', fontsize=12, pad=10)
 
-        # Non-interactive environment - don't call plt.show()
-        plt.close(fig)
+            # スペクトル
+            ax2 = plt.subplot(2, 1, 2)
+
+            mz_values = np.arange(self.max_mz)
+
+            # 予測スペクトル
+            ax2.stem(mz_values, pred_spectrum, linefmt='b-', markerfmt='bo',
+                    basefmt=' ', label='Predicted')
+
+            # 真のスペクトル（あれば）
+            if true_spectrum is not None:
+                ax2.stem(mz_values, true_spectrum, linefmt='r-', markerfmt='ro',
+                        basefmt=' ', label='True', alpha=0.5)
+
+                # 類似度の計算
+                cosine_sim = np.dot(pred_spectrum, true_spectrum) / \
+                            (np.linalg.norm(pred_spectrum) * np.linalg.norm(true_spectrum))
+                ax2.text(0.02, 0.98, f'Cosine Similarity: {cosine_sim:.4f}',
+                        transform=ax2.transAxes, fontsize=12,
+                        verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            ax2.set_xlabel('m/z', fontsize=12)
+            ax2.set_ylabel('Relative Intensity', fontsize=12)
+            ax2.set_title('Mass Spectrum', fontsize=14, pad=10)
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            ax2.set_xlim(0, self.max_mz)
+            ax2.set_ylim(0, 1.05)
+
+            plt.tight_layout()
+
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+                logger.info(f"Saved visualization to {save_path}")
+
+            # Non-interactive environment - close figure without showing
+            plt.close(fig)
     
     def find_significant_peaks(self, spectrum: np.ndarray,
                              threshold: float = 0.05,
