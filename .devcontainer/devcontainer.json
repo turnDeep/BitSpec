@@ -30,7 +30,23 @@
                 "files.exclude": {
                     "**/__pycache__": true,
                     "**/*.pyc": true,
-                    "**/.pytest_cache": true
+                    "**/.pytest_cache": true,
+                    "data/mol_files": true
+                },
+                "files.watcherExclude": {
+                    "**/__pycache__": true,
+                    "**/.pytest_cache": true,
+                    "data/mol_files/**": true,
+                    "**/*.mol": true,
+                    "**/*.sdf": true,
+                    "**/*.msp": true
+                },
+                "search.exclude": {
+                    "**/__pycache__": true,
+                    "**/.pytest_cache": true,
+                    "data/mol_files/**": true,
+                    "**/*.mol": true,
+                    "**/*.sdf": true
                 }
             }
         }
