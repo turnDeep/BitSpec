@@ -49,14 +49,19 @@ class MassSpectrumPredictor:
         # チェックポイントパスの検証と自動検出
         checkpoint_path = self._find_checkpoint(checkpoint_path)
 
-        # モデルの読み込み
+        # モデルの読み込み（configからすべてのパラメータを取得）
         self.model = GCNMassSpecPredictor(
             node_features=self.config['model']['node_features'],
             edge_features=self.config['model']['edge_features'],
             hidden_dim=self.config['model']['hidden_dim'],
             num_layers=self.config['model']['num_layers'],
             spectrum_dim=self.config['data']['max_mz'],
-            dropout=self.config['model']['dropout']
+            dropout=self.config['model']['dropout'],
+            pooling=self.config['model'].get('pooling', 'mean'),  # チェックポイント互換性のためデフォルトはmean
+            conv_type=self.config['model'].get('gcn', {}).get('conv_type', 'GCNConv'),
+            activation=self.config['model'].get('gcn', {}).get('activation', 'relu'),
+            batch_norm=self.config['model'].get('gcn', {}).get('batch_norm', True),
+            residual=self.config['model'].get('gcn', {}).get('residual', True)
         ).to(self.device)
 
         # チェックポイントの読み込み
