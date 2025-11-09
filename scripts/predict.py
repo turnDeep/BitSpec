@@ -23,7 +23,7 @@ from PIL import Image
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.gcn_model import GCNMassSpecPredictor
-from src.features.molecular_features import MolecularFeaturizer
+from src.data.features import MolecularFeaturizer
 from src.utils.rtx50_compat import setup_rtx50_compatibility
 
 logging.basicConfig(level=logging.INFO)
@@ -92,7 +92,7 @@ class MassSpectrumPredictor:
             logger.warning("Could not generate 3D coordinates")
         
         # 分子グラフの特徴量化
-        graph_data = self.featurizer.featurize(mol)
+        graph_data = self.featurizer.mol_to_graph(mol)
         graph_data = graph_data.to(self.device)
         
         # 予測
@@ -147,8 +147,8 @@ class MassSpectrumPredictor:
                 AllChem.MMFFOptimizeMolecule(mol)
             except:
                 pass
-            
-            graph_data = self.featurizer.featurize(mol)
+
+            graph_data = self.featurizer.mol_to_graph(mol)
             graphs.append(graph_data)
         
         if not graphs:
