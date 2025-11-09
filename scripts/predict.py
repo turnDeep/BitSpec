@@ -251,6 +251,17 @@ class MassSpectrumPredictor:
             # 予測
             pred_spectrum = self.predict_from_smiles(smiles)
 
+            # 相対強度に正規化（最大値を1.0にする）
+            max_pred = np.max(pred_spectrum)
+            if max_pred > 0:
+                pred_spectrum = pred_spectrum / max_pred
+
+            # 真のスペクトルも正規化（提供されている場合）
+            if true_spectrum is not None:
+                max_true = np.max(true_spectrum)
+                if max_true > 0:
+                    true_spectrum = true_spectrum / max_true
+
             # 分子構造の描画
             mol = Chem.MolFromSmiles(smiles)
             if mol is None:
