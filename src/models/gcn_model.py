@@ -8,11 +8,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import (
-    GCNConv, SAGEConv, GATConv, 
+    GCNConv, SAGEConv, GATConv,
     global_mean_pool, global_max_pool, global_add_pool,
     AttentionalAggregation
 )
 from torch_geometric.data import Data, Batch
+from torch_scatter import scatter_add
 from typing import Optional, Tuple, List
 
 class GraphConvBlock(nn.Module):
@@ -139,7 +140,15 @@ class GCNMassSpecPredictor(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
-        
+
+        # エッジ情報をノード特徴に統合する層
+        self.edge_to_node_fusion = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),  # ノード特徴 + エッジ情報
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
         # グラフ畳み込み層（論文のConvolution部分）
         self.conv_layers = nn.ModuleList()
         for i in range(num_layers):
@@ -208,15 +217,36 @@ class GCNMassSpecPredictor(nn.Module):
             data: PyG Data object
                 - x: ノード特徴 [N, node_features]
                 - edge_index: エッジインデックス [2, E]
+                - edge_attr: エッジ特徴 [E, edge_features] (optional)
                 - batch: バッチインデックス [N]
 
         Returns:
             グラフレベル特徴量 [batch_size, hidden_dim]
         """
         x, edge_index, batch = data.x, data.edge_index, data.batch
+        edge_attr = data.edge_attr if hasattr(data, 'edge_attr') else None
 
         # 入力埋め込み
         x = self.node_embedding(x)
+
+        # エッジ情報をノード特徴に統合
+        if edge_attr is not None and edge_attr.size(0) > 0:
+            # エッジ埋め込み
+            edge_emb = self.edge_embedding(edge_attr)
+
+            # 各ノードに接続するエッジの情報を集約（平均）
+            # edge_index[1] は終点ノードのインデックス
+            num_nodes = x.size(0)
+            edge_info_per_node = scatter_add(edge_emb, edge_index[1], dim=0, dim_size=num_nodes)
+
+            # 各ノードの次数を計算して平均を取る
+            ones = torch.ones(edge_index.size(1), device=x.device)
+            degree = scatter_add(ones, edge_index[1], dim=0, dim_size=num_nodes).clamp(min=1)
+            edge_info_per_node = edge_info_per_node / degree.unsqueeze(-1)
+
+            # ノード特徴とエッジ情報を結合
+            x = torch.cat([x, edge_info_per_node], dim=-1)
+            x = self.edge_to_node_fusion(x)
 
         # グラフ畳み込み
         for conv_layer in self.conv_layers:
@@ -262,38 +292,55 @@ class GCNMassSpecPredictor(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         部分構造情報を含む詳細な予測
-        
+
         Args:
             data: PyG Data object
             return_attention: アテンションスコアを返すか
-            
+
         Returns:
             spectrum: 予測マススペクトル
             attention: アテンションスコア (optional)
         """
-        x, edge_index, edge_attr, batch = (
-            data.x, data.edge_index, data.edge_attr, data.batch
-        )
-        
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        edge_attr = data.edge_attr if hasattr(data, 'edge_attr') else None
+
         # 入力埋め込み
         x = self.node_embedding(x)
-        
+
+        # エッジ情報をノード特徴に統合
+        if edge_attr is not None and edge_attr.size(0) > 0:
+            # エッジ埋め込み
+            edge_emb = self.edge_embedding(edge_attr)
+
+            # 各ノードに接続するエッジの情報を集約（平均）
+            num_nodes = x.size(0)
+            edge_info_per_node = scatter_add(edge_emb, edge_index[1], dim=0, dim_size=num_nodes)
+
+            # 各ノードの次数を計算して平均を取る
+            ones = torch.ones(edge_index.size(1), device=x.device)
+            degree = scatter_add(ones, edge_index[1], dim=0, dim_size=num_nodes).clamp(min=1)
+            edge_info_per_node = edge_info_per_node / degree.unsqueeze(-1)
+
+            # ノード特徴とエッジ情報を結合
+            x = torch.cat([x, edge_info_per_node], dim=-1)
+            x = self.edge_to_node_fusion(x)
+
         # グラフ畳み込みで特徴抽出
         node_features_list = []
         for conv_layer in self.conv_layers:
             x = conv_layer(x, edge_index)
             node_features_list.append(x)
-        
+
         # プーリング
         if self.pooling_type == "attention" and return_attention:
             graph_features, attention_weights = self.pool(x, batch, return_attention=True)
         else:
             graph_features = self.pool(x, batch) if self.pooling_type != "attention" else self.pool(x, batch)
             attention_weights = None
-        
+
         # スペクトル予測
         spectrum = self.spectrum_predictor(graph_features)
-        
+
         if return_attention:
             return spectrum, attention_weights
         return spectrum, None
