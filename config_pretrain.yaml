@@ -115,7 +115,7 @@ finetuning:
   save_interval: 5        # 10 → 5（定期的な保存）
 
   # Weights & Biases（学習曲線の監視を推奨）
-  use_wandb: true         # false → true（大規模学習の監視）
+  use_wandb: false         # wandb無効化
   wandb_project: "bitspec-finetuning-300k"
 
 # GPU設定 (RTX 50シリーズ対応)
