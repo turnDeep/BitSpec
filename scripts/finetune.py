@@ -6,7 +6,8 @@
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR, ReduceLROnPlateau
+from torch.optim.swa_utils import AveragedModel, SWALR
 import yaml
 from pathlib import Path
 import logging
@@ -14,6 +15,7 @@ from tqdm import tqdm
 import wandb
 from datetime import datetime
 import sys
+import math
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.gcn_model import GCNMassSpecPredictor
@@ -80,7 +82,9 @@ class FinetuneTrainer:
             train_ratio=self.config['data']['train_split'],
             val_ratio=self.config['data']['val_split'],
             batch_size=self.config['finetuning']['batch_size'],
-            num_workers=self.config.get('finetuning', {}).get('num_workers', 4)
+            num_workers=self.config.get('finetuning', {}).get('num_workers', 4),
+            prefetch_factor=self.config.get('finetuning', {}).get('prefetch_factor', 2),
+            persistent_workers=self.config.get('finetuning', {}).get('persistent_workers', True)
         )
 
         # モデルの作成
@@ -179,12 +183,68 @@ class FinetuneTrainer:
             weight_decay=self.config['finetuning']['weight_decay']
         )
 
-        # スケジューラ
-        self.scheduler = CosineAnnealingWarmRestarts(
-            self.optimizer,
-            T_0=self.config['finetuning'].get('scheduler_t0', 10),
-            T_mult=self.config['finetuning'].get('scheduler_tmult', 2)
-        )
+        # スケジューラの選択
+        scheduler_type = self.config['finetuning'].get('scheduler_type', 'cosine_warmup')
+        num_epochs = self.config['finetuning']['num_epochs']
+        steps_per_epoch = len(self.train_loader)
+
+        if scheduler_type == 'onecycle':
+            # OneCycleLR: より積極的な学習率スケジューリング
+            max_lr_backbone = self.config['finetuning'].get('backbone_lr', self.config['finetuning']['learning_rate'])
+            max_lr_head = self.config['finetuning'].get('head_lr', self.config['finetuning']['learning_rate'])
+            self.scheduler = OneCycleLR(
+                self.optimizer,
+                max_lr=[max_lr_backbone, max_lr_head] if len(param_groups) > 1 else max_lr_head,
+                total_steps=num_epochs * steps_per_epoch,
+                pct_start=self.config['finetuning'].get('warmup_pct', 0.3),
+                div_factor=self.config['finetuning'].get('div_factor', 25.0),
+                final_div_factor=self.config['finetuning'].get('final_div_factor', 10000.0),
+                anneal_strategy='cos'
+            )
+            self.scheduler_step_on_batch = True
+        elif scheduler_type == 'cosine_warmup':
+            # Cosine Annealing with Warmup
+            warmup_epochs = self.config['finetuning'].get('warmup_epochs', 5)
+            self.warmup_epochs = warmup_epochs
+            self.scheduler = CosineAnnealingWarmRestarts(
+                self.optimizer,
+                T_0=self.config['finetuning'].get('scheduler_t0', 10),
+                T_mult=self.config['finetuning'].get('scheduler_tmult', 2)
+            )
+            self.scheduler_step_on_batch = False
+        else:
+            # デフォルト: CosineAnnealingWarmRestarts
+            self.scheduler = CosineAnnealingWarmRestarts(
+                self.optimizer,
+                T_0=self.config['finetuning'].get('scheduler_t0', 10),
+                T_mult=self.config['finetuning'].get('scheduler_tmult', 2)
+            )
+            self.scheduler_step_on_batch = False
+            self.warmup_epochs = 0
+
+        # ReduceLROnPlateau（追加のスケジューラー）
+        self.reduce_on_plateau = None
+        if self.config['finetuning'].get('use_reduce_on_plateau', False):
+            self.reduce_on_plateau = ReduceLROnPlateau(
+                self.optimizer,
+                mode='min',
+                factor=0.5,
+                patience=self.config['finetuning'].get('plateau_patience', 3),
+                verbose=True
+            )
+
+        # Stochastic Weight Averaging (SWA)
+        self.use_swa = self.config['finetuning'].get('use_swa', False)
+        if self.use_swa:
+            self.swa_model = AveragedModel(self.model)
+            self.swa_start = self.config['finetuning'].get('swa_start_epoch', num_epochs // 2)
+            self.swa_scheduler = SWALR(
+                self.optimizer,
+                swa_lr=self.config['finetuning'].get('swa_lr', 0.0001)
+            )
+            logger.info(f"SWA enabled, starting at epoch {self.swa_start}")
+        else:
+            self.swa_model = None
 
         # Mixed Precision Training
         self.scaler = torch.amp.GradScaler('cuda') if self.config['finetuning'].get('use_amp', True) else None
@@ -201,6 +261,21 @@ class FinetuneTrainer:
         """1エポックのトレーニング"""
         self.model.train()
         total_loss = 0
+        gradient_accumulation_steps = self.config['finetuning'].get('gradient_accumulation_steps', 1)
+
+        # Warmup学習率の計算
+        if hasattr(self, 'warmup_epochs') and epoch <= self.warmup_epochs:
+            warmup_factor = epoch / max(1, self.warmup_epochs)
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = param_group['initial_lr'] * warmup_factor
+        elif not hasattr(self, 'warmup_epochs'):
+            self.warmup_epochs = 0
+
+        # 初回エポックでinitial_lrを保存
+        if epoch == 1:
+            for param_group in self.optimizer.param_groups:
+                if 'initial_lr' not in param_group:
+                    param_group['initial_lr'] = param_group['lr']
 
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
         for batch_idx, (graphs, spectra, metadatas) in enumerate(pbar):
@@ -208,41 +283,57 @@ class FinetuneTrainer:
             graphs = graphs.to(self.device)
             spectra = spectra.to(self.device)
 
-            # 勾配をゼロ化
-            self.optimizer.zero_grad()
-
             # Mixed Precision Training
             if self.scaler:
                 with torch.amp.autocast('cuda'):
                     # 順伝播
                     pred_spectra = self.model(graphs)
                     loss = self.criterion(pred_spectra, spectra)
+                    loss = loss / gradient_accumulation_steps
 
                 # 逆伝播
                 self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+
+                # Gradient accumulation
+                if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
+
+                    # OneCycleLRの場合はバッチごとにステップ
+                    if hasattr(self, 'scheduler_step_on_batch') and self.scheduler_step_on_batch:
+                        self.scheduler.step()
+
             else:
                 # 順伝播
                 pred_spectra = self.model(graphs)
                 loss = self.criterion(pred_spectra, spectra)
+                loss = loss / gradient_accumulation_steps
 
                 # 逆伝播
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.optimizer.step()
 
-            total_loss += loss.item()
+                # Gradient accumulation
+                if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+
+                    # OneCycleLRの場合はバッチごとにステップ
+                    if hasattr(self, 'scheduler_step_on_batch') and self.scheduler_step_on_batch:
+                        self.scheduler.step()
+
+            total_loss += loss.item() * gradient_accumulation_steps
 
             # プログレスバーの更新
-            pbar.set_postfix({'loss': loss.item()})
+            pbar.set_postfix({'loss': loss.item() * gradient_accumulation_steps})
 
             # Weights & Biasesへのログ
             if self.config.get('finetuning', {}).get('use_wandb', False):
                 wandb.log({
-                    'train/loss': loss.item(),
+                    'train/loss': loss.item() * gradient_accumulation_steps,
                     'train/lr_backbone': self.optimizer.param_groups[0]['lr'] if len(self.optimizer.param_groups) > 1 else self.optimizer.param_groups[0]['lr'],
                     'train/lr_head': self.optimizer.param_groups[-1]['lr'],
                     'epoch': epoch
@@ -334,8 +425,20 @@ class FinetuneTrainer:
             logger.info(f"Epoch {epoch}/{num_epochs} - Val Loss: {val_metrics['loss']:.4f}, "
                         f"Cosine Sim: {val_metrics['cosine_similarity']:.4f}")
 
-            # スケジューラのステップ
-            self.scheduler.step()
+            # スケジューラのステップ（OneCycleLR以外）
+            if not (hasattr(self, 'scheduler_step_on_batch') and self.scheduler_step_on_batch):
+                # Warmup期間後にスケジューラーを適用
+                if epoch > self.warmup_epochs:
+                    self.scheduler.step()
+
+            # ReduceLROnPlateauの適用
+            if self.reduce_on_plateau is not None:
+                self.reduce_on_plateau.step(val_metrics['loss'])
+
+            # SWAの更新
+            if self.use_swa and epoch >= self.swa_start:
+                self.swa_model.update_parameters(self.model)
+                self.swa_scheduler.step()
 
             # チェックポイントの保存
             is_best = val_metrics['loss'] < self.best_val_loss
@@ -343,6 +446,19 @@ class FinetuneTrainer:
                 self.best_val_loss = val_metrics['loss']
 
             self.save_checkpoint(epoch, val_metrics, is_best)
+
+        # SWAモデルの最終処理
+        if self.use_swa:
+            logger.info("Updating SWA batch normalization statistics...")
+            torch.optim.swa_utils.update_bn(self.train_loader, self.swa_model, device=self.device)
+            # SWAモデルを保存
+            swa_checkpoint = {
+                'model_state_dict': self.swa_model.module.state_dict(),
+                'config': self.config
+            }
+            swa_path = self.save_dir / "swa_model.pt"
+            torch.save(swa_checkpoint, swa_path)
+            logger.info(f"Saved SWA model: {swa_path}")
 
         logger.info("Finetuning completed!")
         logger.info(f"Best model saved at: {self.best_model_path}")
