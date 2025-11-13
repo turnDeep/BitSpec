@@ -33,14 +33,17 @@ logger = logging.getLogger(__name__)
 class FinetuneTrainer:
     """ファインチューニングトレーナー"""
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, rebuild_cache: bool = False):
         """
         Args:
             config_path: 設定ファイルのパス
+            rebuild_cache: キャッシュを再構築するかどうか
         """
         # 設定の読み込み
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
+
+        self.rebuild_cache = rebuild_cache
 
         # デバイス設定とRTX 50互換性
         self.device = setup_rtx50_compatibility()
@@ -56,12 +59,19 @@ class FinetuneTrainer:
 
         # データローダーの作成
         logger.info("Creating dataset...")
+        cache_file = str(Path(self.config['data']['output_dir']) / 'dataset_cache.pkl')
+
+        # キャッシュ再構築フラグが有効な場合、既存のキャッシュを削除
+        if self.rebuild_cache and Path(cache_file).exists():
+            logger.info(f"Rebuilding cache: removing {cache_file}")
+            Path(cache_file).unlink()
+
         dataset = MassSpecDataset(
             msp_file=self.config['data']['nist_msp_path'],
             mol_files_dir=self.config['data']['mol_files_dir'],
             max_mz=self.config['data']['max_mz'],
             mz_bin_size=self.config['data']['mz_bin_size'],
-            cache_file=str(Path(self.config['data']['output_dir']) / 'dataset_cache.pkl')
+            cache_file=cache_file
         )
 
         logger.info("Creating dataloaders...")
@@ -349,10 +359,12 @@ def main():
     parser = argparse.ArgumentParser(description='Finetune Pretrained Model on EI-MS Task')
     parser.add_argument('--config', type=str, default='config_pretrain.yaml',
                         help='Path to config file')
+    parser.add_argument('--rebuild-cache', action='store_true',
+                        help='Rebuild the dataset cache from scratch')
     args = parser.parse_args()
 
     # トレーナーの作成と実行
-    trainer = FinetuneTrainer(args.config)
+    trainer = FinetuneTrainer(args.config, rebuild_cache=args.rebuild_cache)
     trainer.train()
 
 
