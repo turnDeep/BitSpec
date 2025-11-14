@@ -6,15 +6,51 @@ NEIMS（Neural EI-MS, 2019）は、EI-MS予測で0.84のWeighted Cosine Similari
 
 ## 性能比較
 
+⚠️ **重要な注意**: NEIMS と BitSpec は**異なる評価指標**を使用していました！
+
+### 評価指標の違い
+
+| モデル | 評価指標 | 値 | 説明 |
+|--------|---------|-----|------|
+| **NEIMS** | **Weighted Cosine Similarity (WCS)** | 0.84 | 強度とm/z値に重み付け |
+| **BitSpec（旧）** | **Cosine Similarity（非重み付き）** | 0.56 | 通常のコサイン類似度 |
+| **BitSpec（新）** | **両方を報告** | - | 公平な比較のため |
+
+### Weighted Cosine Similarity (WCS) とは
+
+```python
+# 非重み付き（BitSpec旧実装）
+cosine_sim = dot(pred, true) / (norm(pred) * norm(true))
+
+# 重み付き（NEIMS、BitSpec新実装）
+weighted_pred = intensity^a * mz^b  # a=0.5-0.6, b=1.3-3.0
+weighted_true = intensity^a * mz^b
+WCS = dot(weighted_pred, weighted_true) / (norm(weighted_pred) * norm(weighted_true))
+```
+
+**重み付けパラメータ**:
+- **NIST標準**: (0.6, 3.0)
+- **Stein & Scott**: (0.5, 3.0)
+- **Kim et al.**: (0.53, 1.3)
+
+**なぜ重み付けが必要か**:
+EI-MSでは、m/z値が大きくなると断片イオンの強度が小さくなる傾向がある。重み付けなしでは、重要な高m/z領域のピークの貢献度が低くなってしまう。
+
+### 性能比較（修正版）
+
 | 指標 | NEIMS (2019) | BitSpec (現状) | BitSpec (目標) |
 |------|--------------|----------------|---------------|
-| **Cosine Similarity** | 0.84 (NIST17内) | 0.56 | 0.70-0.80 |
+| **WCS (Stein & Scott)** | 0.84 (NIST17内) | **要再評価** | 0.70-0.80 |
+| **Cosine Similarity** | - | 0.56 | - |
 | **Training Data** | 約30万スペクトル | 30万化合物 | 同じ |
 | **Recall@1** | 86% | - | - |
 | **Recall@10** | 91.8% | - | - |
 | **予測速度** | 5ms/分子 | - | - |
 
-**重要**: Training set外ではNEIMSも0.20まで低下
+**重要**:
+- Training set外ではNEIMSも0.20まで低下
+- **現在の0.56は非重み付き値のため、NEIMSと直接比較不可**
+- **WCSで再評価する必要がある**
 
 ## アーキテクチャ比較
 
@@ -86,6 +122,12 @@ Training: 30万化合物 (NIST17)
 - ❌ 物理制約が不十分
 
 ## なぜBitSpecが0.56に留まっているか
+
+### 0. **評価指標の違い**（今回実装）⚠️
+- **非重み付きコサイン類似度を使用していた**
+- NEIMSはWeighted Cosine Similarity (WCS)を使用
+- **直接比較は不可能**
+- → WCS実装により公平な比較が可能に
 
 ### 1. **最適化の問題**（今回解決）
 - Warmup なし → OneCycleLRで解決

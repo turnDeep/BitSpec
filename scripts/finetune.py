@@ -422,8 +422,17 @@ class FinetuneTrainer:
 
             # 検証
             val_metrics = self.validate(epoch)
-            logger.info(f"Epoch {epoch}/{num_epochs} - Val Loss: {val_metrics['loss']:.4f}, "
-                        f"Cosine Sim: {val_metrics['cosine_similarity']:.4f}")
+
+            # ログ出力（非重み付きと重み付きコサイン類似度）
+            log_msg = (f"Epoch {epoch}/{num_epochs} - Val Loss: {val_metrics['loss']:.4f}, "
+                      f"Cosine: {val_metrics['cosine_similarity']:.4f}")
+
+            # Weighted Cosine Similarityが計算されている場合は追加
+            if 'wcs_stein' in val_metrics:
+                log_msg += (f", WCS(Stein): {val_metrics['wcs_stein']:.4f}, "
+                           f"WCS(NIST): {val_metrics['wcs_nist']:.4f}")
+
+            logger.info(log_msg)
 
             # スケジューラのステップ（OneCycleLR以外）
             if not (hasattr(self, 'scheduler_step_on_batch') and self.scheduler_step_on_batch):
