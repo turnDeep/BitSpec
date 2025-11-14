@@ -154,19 +154,23 @@ class NISTDataLoader:
         val_ratio: float = 0.1,
         batch_size: int = 32,
         num_workers: int = 4,
+        prefetch_factor: int = 2,
+        persistent_workers: bool = True,
         seed: int = 42
     ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
         訓練、検証、テストのデータローダーを作成
-        
+
         Args:
             dataset: データセット
             train_ratio: 訓練データの割合
             val_ratio: 検証データの割合
             batch_size: バッチサイズ
             num_workers: ワーカー数
+            prefetch_factor: 各ワーカーが先読みするバッチ数
+            persistent_workers: ワーカーを永続化するか（エポック間でワーカーを再利用）
             seed: 乱数シード
-            
+
         Returns:
             train_loader, val_loader, test_loader
         """
@@ -175,12 +179,15 @@ class NISTDataLoader:
         train_size = int(total_size * train_ratio)
         val_size = int(total_size * val_ratio)
         test_size = total_size - train_size - val_size
-        
+
         generator = torch.Generator().manual_seed(seed)
         train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
             dataset, [train_size, val_size, test_size], generator=generator
         )
-        
+
+        # persistent_workersはnum_workers > 0の場合のみ有効
+        use_persistent = persistent_workers and num_workers > 0
+
         # データローダーを作成
         train_loader = DataLoader(
             train_dataset,
@@ -188,27 +195,33 @@ class NISTDataLoader:
             shuffle=True,
             num_workers=num_workers,
             collate_fn=NISTDataLoader.collate_fn,
-            pin_memory=True
+            pin_memory=True,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            persistent_workers=use_persistent
         )
-        
+
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
             collate_fn=NISTDataLoader.collate_fn,
-            pin_memory=True
+            pin_memory=True,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            persistent_workers=use_persistent
         )
-        
+
         test_loader = DataLoader(
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
             collate_fn=NISTDataLoader.collate_fn,
-            pin_memory=True
+            pin_memory=True,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            persistent_workers=use_persistent
         )
-        
+
         return train_loader, val_loader, test_loader
 
 

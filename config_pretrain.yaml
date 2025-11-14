@@ -27,7 +27,7 @@ model:
   hidden_dim: 256
   num_layers: 5
   spectrum_dim: 1000
-  dropout: 0.1
+  dropout: 0.15       # 0.1 → 0.15（過学習対策強化、より良い汎化性能）
   pooling: "mean"  # attention → mean (AttentionalAggregationは初回実行が極めて遅い)
 
   # GCN固有の設定
@@ -88,21 +88,38 @@ finetuning:
   freeze_layers: 0        # 下位N層を凍結（0で凍結なし）
 
   # 異なる学習率（30万化合物用に最適化）
-  backbone_lr: 0.00005    # 事前学習済み層は低学習率（より慎重に）
+  backbone_lr: 0.0001     # 0.00005 → 0.0001（より積極的な学習）
   head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
   learning_rate: 0.001    # デフォルト学習率
 
-  # 訓練設定（30万化合物用に最適化）
-  batch_size: 64          # 32 → 64（RTX 5070 Ti 16GB最適化）
+  # 訓練設定（30万化合物用に最適化 - 2025年最新ベストプラクティス適用）
+  batch_size: 128         # 64 → 128（実効バッチサイズ256でより安定した収束）
   num_epochs: 50          # 200 → 50（大規模データセット用）
-  num_workers: 6          # 4 → 6（データ読み込み高速化）
-  prefetch_factor: 2      # データ先読み設定
-  gradient_accumulation_steps: 1  # 必要に応じて2に変更
+  num_workers: 8          # 6 → 8（データ読み込み高速化、persistent_workersで安定）
+  prefetch_factor: 4      # 2 → 4（より積極的な先読み）
+  persistent_workers: true  # ワーカーの永続化でエポック間の起動コスト削減
+  gradient_accumulation_steps: 2  # 1 → 2（実効バッチサイズ256、メモリ効率向上）
   weight_decay: 0.0001
 
-  # スケジューラ（大規模データ用に調整）
-  scheduler_t0: 5         # 10 → 5（短いサイクル）
-  scheduler_tmult: 2
+  # スケジューラ設定（最新の研究に基づく最適化）
+  scheduler_type: "onecycle"  # OneCycleLR: より積極的な学習率スケジューリング
+  warmup_pct: 0.3         # OneCycleLR用：30%をwarmupに使用
+  div_factor: 25.0        # OneCycleLR用：初期学習率 = max_lr / div_factor
+  final_div_factor: 10000.0  # OneCycleLR用：最終学習率 = max_lr / final_div_factor
+
+  # 従来のスケジューラー設定（scheduler_type="cosine_warmup"の場合）
+  warmup_epochs: 5        # 学習率warmup期間（エポック数）
+  scheduler_t0: 10        # CosineAnnealingWarmRestarts用
+  scheduler_tmult: 2      # CosineAnnealingWarmRestarts用
+
+  # Loss plateau対策
+  use_reduce_on_plateau: true  # Validation lossが改善しない場合に学習率を下げる
+  plateau_patience: 5     # 何エポック改善がなければ学習率を下げるか
+
+  # Stochastic Weight Averaging (SWA) - 汎化性能向上
+  use_swa: true           # SWAを有効化（後半のエポックで重み平均化）
+  swa_start_epoch: 30     # 50エポック中の30エポック目からSWA開始
+  swa_lr: 0.0001          # SWA時の学習率
 
   # 混合精度訓練
   use_amp: true
