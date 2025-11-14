@@ -14,19 +14,24 @@
 
 ## 実装した改善策（2025年最新ベストプラクティス）
 
-### 1. DataLoader最適化（処理速度安定化）
+### 1. DataLoader最適化（処理速度安定化・32GB RAM対応）
 
 #### `src/data/dataset.py`の変更
 ```yaml
 persistent_workers: true  # ワーカーをエポック間で再利用
-prefetch_factor: 4        # 先読みバッチ数を2→4に増加
-num_workers: 8            # ワーカー数を6→8に増加
+prefetch_factor: 2        # 先読みバッチ数（32GB RAM制約下）
+num_workers: 4            # ワーカー数（32GB RAM制約下）
 ```
 
 **期待される効果**：
 - エポック開始時のワーカー起動コスト削減
 - データローディングとGPU計算のオーバーラップ向上
 - 処理速度の安定化（変動幅の縮小）
+- **32GBシステムメモリでの安全な動作**
+
+**メモリ消費削減**：
+- ワーカープリフェッチメモリ：4 workers × 2 batches × 64 samples = **512サンプル常駐**
+- 以前の設定（8 × 4 × 128 = 4096）と比較して**87.5%削減**
 
 **根拠**：
 - PyTorch Lightning公式ドキュメント（2024）
@@ -79,21 +84,25 @@ swa_lr: 0.0001
 - PyTorch SWA公式実装
 - 多数の論文で汎化性能向上を実証
 
-### 5. Gradient Accumulation増加
+### 5. Gradient Accumulation増加（32GB RAM対応）
 
 ```yaml
-batch_size: 128                    # 64 → 128
-gradient_accumulation_steps: 2     # 1 → 2
-# 実効バッチサイズ: 128 × 2 = 256
+batch_size: 64                     # メモリ効率重視
+gradient_accumulation_steps: 4     # 1 → 4
+num_workers: 4                     # 8 → 4（32GB制約）
+prefetch_factor: 2                 # 4 → 2（メモリ消費抑制）
+# 実効バッチサイズ: 64 × 4 = 256
 ```
 
 **期待される効果**：
 - より安定した勾配推定
 - Loss plateauの克服
-- メモリ効率の維持
+- **32GBシステムメモリでも安全に動作**
+- メモリ使用量を約75%削減（ワーカープリフェッチ: 4096サンプル → 512サンプル）
 
 **根拠**：
 - 大規模バッチは収束を安定化（多数の研究で実証）
+- Gradient accumulationはメモリ効率的に大バッチ効果を実現
 
 ### 6. モデル正則化強化
 
@@ -161,24 +170,77 @@ python scripts/finetune.py --config config_pretrain.yaml
 python scripts/finetune.py --config config_pretrain.yaml --rebuild-cache
 ```
 
+## メモリ使用量の見積もり（32GB RAM対応版）
+
+### 現在の設定（最適化版）
+```yaml
+batch_size: 64
+num_workers: 4
+prefetch_factor: 2
+gradient_accumulation_steps: 4
+```
+
+**推定メモリ消費**：
+- 30万化合物キャッシュ：約2-4GB
+- ワーカープリフェッチ：4 workers × 2 batches × 64 samples = **512サンプル** → 約3-5GB
+- GPUメモリ（RTX 5070 Ti 16GB）：バッチサイズ64で約8-10GB
+- **総システムメモリ消費**：約10-15GB（**32GBで安全**）
+
+### もしメモリ不足が発生する場合
+
+さらにメモリを節約する設定：
+
+```yaml
+finetuning:
+  batch_size: 48                   # 64 → 48
+  num_workers: 2                   # 4 → 2
+  prefetch_factor: 2               # 維持
+  gradient_accumulation_steps: 5   # 4 → 5（実効240）
+  persistent_workers: false        # 必要に応じてfalse
+```
+
 ## 代替設定（より保守的なアプローチ）
 
-より保守的な設定を希望する場合、`config_pretrain.yaml`で以下を変更：
+より保守的な学習戦略を希望する場合：
 
 ```yaml
 finetuning:
   scheduler_type: "cosine_warmup"  # OneCycleLRの代わり
-  batch_size: 96                   # より小さいバッチサイズ
-  gradient_accumulation_steps: 1   # accumulationなし
   use_swa: false                   # SWA無効化
+  use_reduce_on_plateau: false     # ReduceLROnPlateau無効化
 ```
 
 ## モニタリング推奨事項
 
-1. **処理速度**: 各エポックのit/s値を監視
-2. **学習率**: wandbまたはログで学習率の遷移を確認
-3. **Loss**: Train/Val lossの差を監視（過学習チェック）
-4. **GPU使用率**: nvidia-smiで確認
+### 必須モニタリング項目
+
+1. **システムメモリ使用率**（重要！）
+   ```bash
+   # 別ターミナルで実行（リアルタイム監視）
+   watch -n 1 free -h
+
+   # またはhtopでより詳細に
+   htop
+   ```
+   - 使用率が80%を超えたら設定を見直し
+   - スワップが発生していないか確認
+
+2. **GPU使用率とメモリ**
+   ```bash
+   watch -n 1 nvidia-smi
+   ```
+   - GPUメモリ使用率を監視
+   - GPU利用率（Utilization）を確認
+
+3. **処理速度**: 各エポックのit/s値を監視
+   - 安定して15-25 it/s程度なら良好
+   - 大きな変動（10倍以上）は問題あり
+
+4. **学習率**: ログで学習率の遷移を確認
+   - OneCycleLRの場合、warmup→peak→annealingの遷移を確認
+
+5. **Loss**: Train/Val lossの差を監視（過学習チェック）
+   - Validation lossが改善しているか確認
 
 ## 参考文献
 

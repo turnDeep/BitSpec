@@ -92,13 +92,13 @@ finetuning:
   head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
   learning_rate: 0.001    # デフォルト学習率
 
-  # 訓練設定（30万化合物用に最適化 - 2025年最新ベストプラクティス適用）
-  batch_size: 128         # 64 → 128（実効バッチサイズ256でより安定した収束）
+  # 訓練設定（30万化合物用に最適化 - 32GB RAM対応版）
+  batch_size: 64          # メモリ効率重視（実効バッチサイズ256維持）
   num_epochs: 50          # 200 → 50（大規模データセット用）
-  num_workers: 8          # 6 → 8（データ読み込み高速化、persistent_workersで安定）
-  prefetch_factor: 4      # 2 → 4（より積極的な先読み）
+  num_workers: 4          # 4ワーカー（32GB RAM制約下での安定性重視）
+  prefetch_factor: 2      # 先読み2バッチ（メモリ消費抑制）
   persistent_workers: true  # ワーカーの永続化でエポック間の起動コスト削減
-  gradient_accumulation_steps: 2  # 1 → 2（実効バッチサイズ256、メモリ効率向上）
+  gradient_accumulation_steps: 4  # 1 → 4（実効バッチサイズ256、メモリ効率最大化）
   weight_decay: 0.0001
 
   # スケジューラ設定（最新の研究に基づく最適化）
