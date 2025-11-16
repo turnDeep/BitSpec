@@ -13,12 +13,12 @@ import pickle
 from tqdm import tqdm
 
 from .mol_parser import MOLParser, NISTMSPParser
-from .features import MolecularFeaturizer
+from .features import MolecularFeaturizer, SubstructureFeaturizer
 
 
 class MassSpecDataset(Dataset):
     """マススペクトル予測データセット"""
-    
+
     def __init__(
         self,
         msp_file: str,
@@ -26,7 +26,8 @@ class MassSpecDataset(Dataset):
         max_mz: int = 1000,
         mz_bin_size: float = 1.0,
         cache_file: Optional[str] = None,
-        transform=None
+        transform=None,
+        use_substructure: bool = True
     ):
         """
         Args:
@@ -36,17 +37,20 @@ class MassSpecDataset(Dataset):
             mz_bin_size: ビンサイズ
             cache_file: キャッシュファイルのパス
             transform: データ変換関数
+            use_substructure: 部分構造特徴量を使用するかどうか
         """
         self.msp_file = msp_file
         self.mol_files_dir = Path(mol_files_dir)
         self.max_mz = max_mz
         self.mz_bin_size = mz_bin_size
         self.transform = transform
-        
+        self.use_substructure = use_substructure
+
         # パーサーと特徴量抽出器
         self.msp_parser = NISTMSPParser()
         self.mol_parser = MOLParser()
         self.featurizer = MolecularFeaturizer()
+        self.substructure_featurizer = SubstructureFeaturizer() if use_substructure else None
         
         # キャッシュから読み込むか、新規に処理
         if cache_file and Path(cache_file).exists():
@@ -82,17 +86,22 @@ class MassSpecDataset(Dataset):
                     continue
                 
                 mol = self.mol_parser.parse_file(str(mol_file))
-                
+
                 # スペクトルを正規化
                 spectrum = self.msp_parser.normalize_spectrum(
                     compound['Spectrum'],
                     max_mz=self.max_mz,
                     mz_bin_size=self.mz_bin_size
                 )
-                
+
                 # グラフデータに変換
                 graph_data = self.featurizer.mol_to_graph(mol, y=spectrum)
-                
+
+                # 部分構造フィンガープリントを追加
+                if self.use_substructure and self.substructure_featurizer is not None:
+                    substructure_fp = self.substructure_featurizer.get_substructure_fingerprint(mol)
+                    graph_data.substructure_fp = torch.tensor(substructure_fp, dtype=torch.float32)
+
                 # メタデータ
                 metadata = {
                     'name': compound.get('Name', ''),

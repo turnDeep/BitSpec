@@ -120,6 +120,8 @@ class GCNMassSpecPredictor(nn.Module):
         batch_norm: bool = True,
         residual: bool = True,
         use_gradient_checkpointing: bool = False,  # メモリ節約のためのGradient Checkpointing
+        use_substructure: bool = True,  # 部分構造特徴量を使用するか
+        substructure_dim: int = 48,  # 部分構造特徴量の次元
     ):
         super().__init__()
 
@@ -128,6 +130,8 @@ class GCNMassSpecPredictor(nn.Module):
         self.spectrum_dim = spectrum_dim
         self.pooling_type = pooling
         self.use_gradient_checkpointing = use_gradient_checkpointing
+        self.use_substructure = use_substructure
+        self.substructure_dim = substructure_dim
         
         # 入力埋め込み層
         self.node_embedding = nn.Sequential(
@@ -185,19 +189,33 @@ class GCNMassSpecPredictor(nn.Module):
             self.pool = AttentionalAggregation(gate_nn, nn_transform)
         else:
             raise ValueError(f"Unknown pooling: {pooling}")
-        
+
+        # 部分構造特徴量の埋め込み層
+        if self.use_substructure:
+            self.substructure_embedding = nn.Sequential(
+                nn.Linear(substructure_dim, hidden_dim // 2),
+                nn.BatchNorm1d(hidden_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout)
+            )
+            # 統合後の特徴量次元: hidden_dim (graph) + hidden_dim // 2 (substructure)
+            combined_dim = hidden_dim + hidden_dim // 2
+        else:
+            self.substructure_embedding = None
+            combined_dim = hidden_dim
+
         # マススペクトル予測ヘッド
         self.spectrum_predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.Linear(combined_dim, hidden_dim * 2),
             nn.BatchNorm1d(hidden_dim * 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            
+
             nn.Linear(hidden_dim * 2, hidden_dim * 2),
             nn.BatchNorm1d(hidden_dim * 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            
+
             nn.Linear(hidden_dim * 2, spectrum_dim),
             nn.Sigmoid()  # 強度は0-1の範囲
         )
@@ -282,6 +300,7 @@ class GCNMassSpecPredictor(nn.Module):
                 - edge_index: エッジインデックス [2, E]
                 - edge_attr: エッジ特徴 [E, edge_features]
                 - batch: バッチインデックス [N]
+                - substructure_fp: 部分構造フィンガープリント [batch_size, substructure_dim] (optional)
 
         Returns:
             予測マススペクトル [batch_size, spectrum_dim]
@@ -289,8 +308,15 @@ class GCNMassSpecPredictor(nn.Module):
         # グラフ特徴量を抽出
         graph_features = self.extract_graph_features(data)
 
+        # 部分構造特徴量を統合
+        if self.use_substructure and hasattr(data, 'substructure_fp') and data.substructure_fp is not None:
+            substructure_features = self.substructure_embedding(data.substructure_fp)
+            combined_features = torch.cat([graph_features, substructure_features], dim=-1)
+        else:
+            combined_features = graph_features
+
         # マススペクトル予測
-        spectrum = self.spectrum_predictor(graph_features)
+        spectrum = self.spectrum_predictor(combined_features)
 
         return spectrum
     

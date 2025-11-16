@@ -31,6 +31,10 @@ model:
   pooling: "mean"  # attention → mean (AttentionalAggregationは初回実行が極めて遅い)
   use_gradient_checkpointing: true  # メモリ節約：中間活性化を逆伝播時に再計算
 
+  # 部分構造特徴量設定
+  use_substructure: true  # 部分構造フィンガープリントを使用（官能基パターン検出）
+  substructure_dim: 48    # 部分構造特徴量の次元（48個の化学的パターン）
+
   # GCN固有の設定
   gcn:
     conv_type: "GCNConv"
@@ -125,8 +129,8 @@ finetuning:
   # 混合精度訓練
   use_amp: true
 
-  # 損失関数
-  loss_tolerance: 0.1
+  # 損失関数（EI-MS用）
+  loss_type: "mse"  # mse, l1, smooth_l1から選択
 
   # 保存設定
   checkpoint_dir: "checkpoints/finetune"
