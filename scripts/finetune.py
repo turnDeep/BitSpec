@@ -229,8 +229,7 @@ class FinetuneTrainer:
                 self.optimizer,
                 mode='min',
                 factor=0.5,
-                patience=self.config['finetuning'].get('plateau_patience', 3),
-                verbose=True
+                patience=self.config['finetuning'].get('plateau_patience', 3)
             )
 
         # Stochastic Weight Averaging (SWA)
