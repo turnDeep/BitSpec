@@ -7,6 +7,7 @@ Graph Convolutional Networkベースのマススペクトル予測モデル
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torch_geometric.nn import (
     GCNConv, SAGEConv, GATConv,
     global_mean_pool, global_max_pool, global_add_pool,
@@ -118,13 +119,15 @@ class GCNMassSpecPredictor(nn.Module):
         activation: str = "relu",
         batch_norm: bool = True,
         residual: bool = True,
+        use_gradient_checkpointing: bool = False,  # メモリ節約のためのGradient Checkpointing
     ):
         super().__init__()
-        
+
         self.node_features = node_features
         self.hidden_dim = hidden_dim
         self.spectrum_dim = spectrum_dim
         self.pooling_type = pooling
+        self.use_gradient_checkpointing = use_gradient_checkpointing
         
         # 入力埋め込み層
         self.node_embedding = nn.Sequential(
@@ -248,9 +251,15 @@ class GCNMassSpecPredictor(nn.Module):
             x = torch.cat([x, edge_info_per_node], dim=-1)
             x = self.edge_to_node_fusion(x)
 
-        # グラフ畳み込み
-        for conv_layer in self.conv_layers:
-            x = conv_layer(x, edge_index)
+        # グラフ畳み込み（Gradient Checkpointing対応）
+        if self.use_gradient_checkpointing and self.training:
+            # メモリ節約：中間活性化を保存せず、逆伝播時に再計算
+            for conv_layer in self.conv_layers:
+                x = checkpoint(conv_layer, x, edge_index, use_reentrant=False)
+        else:
+            # 通常の処理
+            for conv_layer in self.conv_layers:
+                x = conv_layer(x, edge_index)
 
         # グラフプーリング
         if self.pooling_type == "attention":
@@ -325,11 +334,16 @@ class GCNMassSpecPredictor(nn.Module):
             x = torch.cat([x, edge_info_per_node], dim=-1)
             x = self.edge_to_node_fusion(x)
 
-        # グラフ畳み込みで特徴抽出
+        # グラフ畳み込みで特徴抽出（Gradient Checkpointing対応）
         node_features_list = []
-        for conv_layer in self.conv_layers:
-            x = conv_layer(x, edge_index)
-            node_features_list.append(x)
+        if self.use_gradient_checkpointing and self.training:
+            for conv_layer in self.conv_layers:
+                x = checkpoint(conv_layer, x, edge_index, use_reentrant=False)
+                node_features_list.append(x)
+        else:
+            for conv_layer in self.conv_layers:
+                x = conv_layer(x, edge_index)
+                node_features_list.append(x)
 
         # プーリング
         if self.pooling_type == "attention" and return_attention:

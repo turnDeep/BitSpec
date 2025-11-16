@@ -80,7 +80,8 @@ class PretrainTrainer:
             pooling=self.config['model'].get('pooling', 'attention'),
             activation=self.config['model'].get('gcn', {}).get('activation', 'relu'),
             batch_norm=self.config['model'].get('gcn', {}).get('batch_norm', True),
-            residual=self.config['model'].get('gcn', {}).get('residual', True)
+            residual=self.config['model'].get('gcn', {}).get('residual', True),
+            use_gradient_checkpointing=self.config['model'].get('use_gradient_checkpointing', False)
         ).to(self.device)
 
         # 事前学習ヘッドの作成
