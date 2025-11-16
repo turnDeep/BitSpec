@@ -1,0 +1,202 @@
+# config_pretrain.yaml
+# PCQM4Mv2事前学習とファインチューニングの設定ファイル
+
+# プロジェクト設定
+project:
+  name: "BitSpec_Pretrain"
+  description: "PCQM4Mv2 Pretraining for Mass Spectrum Prediction"
+  version: "1.0.0"
+
+# データ設定
+data:
+  nist_msp_path: "data/NIST17.MSP"
+  mol_files_dir: "data/mol_files"
+  output_dir: "data/processed"
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  max_mz: 1000
+  mz_bin_size: 1.0
+  min_intensity: 0.001
+
+# モデル設定
+model:
+  type: "GCN"
+  node_features: 48   # BitSpecの現在の設定
+  edge_features: 6    # BitSpecの現在の設定
+  hidden_dim: 256
+  num_layers: 5
+  spectrum_dim: 1000
+  dropout: 0.15       # 0.1 → 0.15（過学習対策強化、より良い汎化性能）
+  pooling: "mean"  # attention → mean (AttentionalAggregationは初回実行が極めて遅い)
+
+  # GCN固有の設定
+  gcn:
+    conv_type: "GCNConv"
+    activation: "relu"
+    batch_norm: true
+    residual: true
+
+# 事前学習設定
+pretraining:
+  # データセット設定
+  dataset: "PCQM4Mv2"
+  data_path: "data/"
+  task: "homo_lumo_gap"  # homo_lumo_gap または multi_task
+
+  # 訓練設定（GPU使用率最適化）
+  # バッチサイズ調整ガイド：
+  # - RTX 5070 Ti (17GB): 512-1024推奨（安定性重視）
+  # - 大きすぎるバッチサイズは初回処理に時間がかかる
+  # - GPU使用率が低い場合: 段階的に増やす（768, 1024など）
+  batch_size: 512  # 2048 → 512 (初回バッチ処理を高速化、安定性向上)
+  num_epochs: 100
+  num_workers: 4  # 8 → 4 (HTTP 500エラー対策：同時接続数を削減)
+  prefetch_factor: 4  # 8 → 4 (HTTP 500エラー対策：同時プリフェッチを削減)
+  gradient_accumulation_steps: 4  # 1 → 4 (実効バッチサイズ2048を維持)
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+  # スケジューラ
+  scheduler_t0: 10
+  scheduler_tmult: 2
+
+  # 混合精度訓練
+  use_amp: true
+
+  # 保存設定
+  checkpoint_dir: "checkpoints/pretrain"
+  save_interval: 10
+
+  # デバッグ用（小さなサブセットで試す場合）
+  use_subset: null  # 例: 10000 でテスト用に10000サンプルのみ使用
+
+  # Weights & Biases
+  use_wandb: false
+  wandb_project: "bitspec-pretraining"
+
+  # 学習する層の制御
+  freeze_layers: []  # 事前学習では全層を学習
+
+# ファインチューニング設定
+finetuning:
+  # 事前学習済みモデル
+  pretrained_checkpoint: "checkpoints/pretrain/pretrained_backbone.pt"
+
+  # バックボーン凍結設定
+  freeze_backbone: false  # true: バックボーン全体を凍結
+  freeze_layers: 0        # 下位N層を凍結（0で凍結なし）
+
+  # 異なる学習率（30万化合物用に最適化）
+  backbone_lr: 0.0001     # 0.00005 → 0.0001（より積極的な学習）
+  head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
+  learning_rate: 0.001    # デフォルト学習率
+
+  # 訓練設定（30万化合物用に最適化 - 2025年最新ベストプラクティス適用）
+  batch_size: 128         # 64 → 128（実効バッチサイズ256でより安定した収束）
+  num_epochs: 50          # 200 → 50（大規模データセット用）
+  num_workers: 8          # 6 → 8（データ読み込み高速化、persistent_workersで安定）
+  prefetch_factor: 4      # 2 → 4（より積極的な先読み）
+  persistent_workers: true  # ワーカーの永続化でエポック間の起動コスト削減
+  gradient_accumulation_steps: 2  # 1 → 2（実効バッチサイズ256、メモリ効率向上）
+  weight_decay: 0.0001
+
+  # スケジューラ設定（最新の研究に基づく最適化）
+  scheduler_type: "onecycle"  # OneCycleLR: より積極的な学習率スケジューリング
+  warmup_pct: 0.3         # OneCycleLR用：30%をwarmupに使用
+  div_factor: 25.0        # OneCycleLR用：初期学習率 = max_lr / div_factor
+  final_div_factor: 10000.0  # OneCycleLR用：最終学習率 = max_lr / final_div_factor
+
+  # 従来のスケジューラー設定（scheduler_type="cosine_warmup"の場合）
+  warmup_epochs: 5        # 学習率warmup期間（エポック数）
+  scheduler_t0: 10        # CosineAnnealingWarmRestarts用
+  scheduler_tmult: 2      # CosineAnnealingWarmRestarts用
+
+  # Loss plateau対策
+  use_reduce_on_plateau: true  # Validation lossが改善しない場合に学習率を下げる
+  plateau_patience: 5     # 何エポック改善がなければ学習率を下げるか
+
+  # Stochastic Weight Averaging (SWA) - 汎化性能向上
+  use_swa: true           # SWAを有効化（後半のエポックで重み平均化）
+  swa_start_epoch: 30     # 50エポック中の30エポック目からSWA開始
+  swa_lr: 0.0001          # SWA時の学習率
+
+  # 混合精度訓練
+  use_amp: true
+
+  # 損失関数
+  loss_tolerance: 0.1
+
+  # 保存設定
+  checkpoint_dir: "checkpoints/finetune"
+  save_interval: 5        # 10 → 5（定期的な保存）
+
+  # Weights & Biases（学習曲線の監視を推奨）
+  use_wandb: false         # wandb無効化
+  wandb_project: "bitspec-finetuning-300k"
+
+# GPU設定 (RTX 50シリーズ対応)
+gpu:
+  use_cuda: true
+  device_ids: [0]
+  mixed_precision: true
+  # torch.compile: PyTorch Geometricとの相性が悪く、初回バッチで10-30分以上フリーズする
+  # PyTorch Geometricは既に最適化されたCUDAカーネルを使用しているため、compileは不要
+  compile: false  # true にすると初回バッチが極めて遅くなる（10-30分以上）
+  compile_mode: "default"  # "reduce-overhead"は更に遅い。使う場合は"default"を推奨
+
+  # RTX 50シリーズ固有の設定
+  rtx50:
+    enable_compat: true
+    force_sm90_emulation: false
+
+# ロギング設定
+logging:
+  use_tensorboard: false
+  use_wandb: false
+  log_dir: "logs"
+  log_every: 10
+
+# 評価設定
+evaluation:
+  metrics:
+    - "cosine_similarity"
+    - "mse"
+    - "mae"
+    - "recall_at_k"
+  recall_k_values: [1, 5, 10, 20]
+
+# ベンチマーク設定（実験用）
+benchmark:
+  # 比較実験
+  experiments:
+    - name: "random_init"
+      description: "ランダム初期化（ベースライン）"
+      use_pretrain: false
+
+    - name: "pretrain_homo_lumo"
+      description: "HOMO-LUMO gap事前学習"
+      use_pretrain: true
+      pretrain_task: "homo_lumo_gap"
+
+    - name: "pretrain_multitask"
+      description: "マルチタスク事前学習"
+      use_pretrain: true
+      pretrain_task: "multi_task"
+
+  # データ量を変えた性能評価
+  data_fractions: [0.25, 0.5, 0.75, 1.0]
+
+  # 凍結戦略の比較
+  freeze_strategies:
+    - name: "no_freeze"
+      freeze_backbone: false
+      freeze_layers: 0
+
+    - name: "freeze_all"
+      freeze_backbone: true
+      freeze_layers: 0
+
+    - name: "freeze_3_layers"
+      freeze_backbone: false
+      freeze_layers: 3
