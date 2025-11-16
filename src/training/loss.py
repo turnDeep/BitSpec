@@ -9,6 +9,44 @@ import torch.nn.functional as F
 from typing import Optional
 
 
+class CosineSimilarityLoss(nn.Module):
+    """
+    Cosine Similarity Loss
+
+    EI-MSスペクトル予測のためのシンプルなコサイン類似度損失関数。
+    スペクトルの相対的な強度パターンを学習することに特化。
+
+    Loss = 1 - cosine_similarity(pred, target)
+    """
+
+    def __init__(self):
+        """
+        コサイン類似度損失を初期化
+        """
+        super().__init__()
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        損失を計算
+
+        Args:
+            pred: 予測スペクトル [batch_size, spectrum_dim]
+            target: 正解スペクトル [batch_size, spectrum_dim]
+
+        Returns:
+            損失値（1 - コサイン類似度）
+        """
+        # コサイン類似度を計算（-1から1の範囲）
+        cosine_sim = F.cosine_similarity(pred, target, dim=1).mean()
+
+        # 損失として返す（0から2の範囲、最小値0が最適）
+        return 1.0 - cosine_sim
+
+
 class ModifiedCosineLoss(nn.Module):
     """
     Modified Cosine Loss

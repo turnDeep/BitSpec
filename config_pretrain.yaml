@@ -130,7 +130,10 @@ finetuning:
   use_amp: true
 
   # 損失関数（EI-MS用）
-  loss_type: "mse"  # mse, l1, smooth_l1から選択
+  loss_type: "cosine"  # cosine（推奨）, mse, l1, smooth_l1から選択
+  # cosine: コサイン類似度損失（業界標準、スペクトルパターンマッチングに最適）
+  # mse: 平均二乗誤差（絶対値の差を重視、非推奨）
+  # l1/smooth_l1: L1損失（外れ値に頑健、実験的）
 
   # 保存設定
   checkpoint_dir: "checkpoints/finetune"

@@ -22,6 +22,7 @@ from src.models.gcn_model import GCNMassSpecPredictor
 from src.data.dataset import MassSpecDataset, NISTDataLoader
 from src.utils.rtx50_compat import setup_rtx50_compatibility
 from src.utils.metrics import calculate_metrics
+from src.training.loss import CosineSimilarityLoss
 
 # ロギング設定
 logging.basicConfig(
@@ -148,17 +149,23 @@ class FinetuneTrainer:
         else:
             logger.warning("No pretrained checkpoint provided. Training from scratch.")
 
-        # 損失関数（EI-MSには標準的なMSE Lossを使用）
-        loss_type = self.config['finetuning'].get('loss_type', 'mse')
-        if loss_type == 'mse':
+        # 損失関数（EI-MSにはコサイン類似度損失を推奨）
+        loss_type = self.config['finetuning'].get('loss_type', 'cosine')
+        if loss_type == 'cosine':
+            self.criterion = CosineSimilarityLoss()
+            logger.info("Using Cosine Similarity Loss (recommended for EI-MS)")
+        elif loss_type == 'mse':
             self.criterion = nn.MSELoss()
+            logger.info("Using MSE Loss")
         elif loss_type == 'l1':
             self.criterion = nn.L1Loss()
+            logger.info("Using L1 Loss")
         elif loss_type == 'smooth_l1':
             self.criterion = nn.SmoothL1Loss()
+            logger.info("Using Smooth L1 Loss")
         else:
-            logger.warning(f"Unknown loss type: {loss_type}, using MSE")
-            self.criterion = nn.MSELoss()
+            logger.warning(f"Unknown loss type: {loss_type}, using Cosine Similarity Loss")
+            self.criterion = CosineSimilarityLoss()
 
         # オプティマイザ（異なる学習率）
         backbone_params = []
