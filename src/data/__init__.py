@@ -5,7 +5,7 @@
 
 from .dataset import MassSpecDataset, NISTDataLoader
 from .mol_parser import MOLParser, NISTMSPParser
-from .features import MolecularFeaturizer
+from .features import MolecularFeaturizer, SubstructureFeaturizer
 
 __all__ = [
     "MassSpecDataset",
@@ -13,4 +13,5 @@ __all__ = [
     "MOLParser",
     "NISTMSPParser",
     "MolecularFeaturizer",
+    "SubstructureFeaturizer",
 ]
