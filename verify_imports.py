@@ -85,19 +85,19 @@ def check_circular_imports():
             lines = f.readlines()
 
         for i, line in enumerate(lines, 1):
-            line = line.strip()
-            # 自己インポートをチェック
-            if py_file.stem in line and (line.startswith("from") or line.startswith("import")):
-                if f"from src.data.{py_file.stem} import" in line:
-                    print(f"  ✗ Line {i}: Self-import detected!")
-                    print(f"     {line}")
-                    return False
+            stripped_line = line.strip()
 
-            # パッケージからの絶対インポートをチェック(推奨されない)
-            if "from src.data.dataset import" in line and py_file.stem == "dataset":
-                print(f"  ✗ Line {i}: Self-import detected!")
-                print(f"     {line}")
-                return False
+            # Skip comments and empty lines
+            if not stripped_line or stripped_line.startswith('#'):
+                continue
+
+            # 自己インポートをチェック（絶対インポートのみ）
+            # from src.data.FILENAME import ... のような自己参照を検出
+            if stripped_line.startswith("from") or stripped_line.startswith("import"):
+                if f"from src.data.{py_file.stem} import" in stripped_line:
+                    print(f"  ✗ Line {i}: Self-import detected!")
+                    print(f"     {stripped_line}")
+                    return False
 
     print("  ✓ No circular imports detected")
     return True
