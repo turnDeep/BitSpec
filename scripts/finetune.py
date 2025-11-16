@@ -19,7 +19,6 @@ import math
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.gcn_model import GCNMassSpecPredictor
-from src.training.loss import ModifiedCosineLoss
 from src.data.dataset import MassSpecDataset, NISTDataLoader
 from src.utils.rtx50_compat import setup_rtx50_compatibility
 from src.utils.metrics import calculate_metrics
@@ -73,7 +72,8 @@ class FinetuneTrainer:
             mol_files_dir=self.config['data']['mol_files_dir'],
             max_mz=self.config['data']['max_mz'],
             mz_bin_size=self.config['data']['mz_bin_size'],
-            cache_file=cache_file
+            cache_file=cache_file,
+            use_substructure=self.config['model'].get('use_substructure', True)
         )
 
         logger.info("Creating dataloaders...")
@@ -101,7 +101,9 @@ class FinetuneTrainer:
             activation=self.config['model'].get('gcn', {}).get('activation', 'relu'),
             batch_norm=self.config['model'].get('gcn', {}).get('batch_norm', True),
             residual=self.config['model'].get('gcn', {}).get('residual', True),
-            use_gradient_checkpointing=self.config['model'].get('use_gradient_checkpointing', False)
+            use_gradient_checkpointing=self.config['model'].get('use_gradient_checkpointing', False),
+            use_substructure=self.config['model'].get('use_substructure', True),
+            substructure_dim=self.config['model'].get('substructure_dim', 48)
         ).to(self.device)
 
         # 事前学習済みチェックポイントのロード
@@ -146,10 +148,17 @@ class FinetuneTrainer:
         else:
             logger.warning("No pretrained checkpoint provided. Training from scratch.")
 
-        # 損失関数
-        self.criterion = ModifiedCosineLoss(
-            tolerance=self.config['finetuning'].get('loss_tolerance', 0.1)
-        )
+        # 損失関数（EI-MSには標準的なMSE Lossを使用）
+        loss_type = self.config['finetuning'].get('loss_type', 'mse')
+        if loss_type == 'mse':
+            self.criterion = nn.MSELoss()
+        elif loss_type == 'l1':
+            self.criterion = nn.L1Loss()
+        elif loss_type == 'smooth_l1':
+            self.criterion = nn.SmoothL1Loss()
+        else:
+            logger.warning(f"Unknown loss type: {loss_type}, using MSE")
+            self.criterion = nn.MSELoss()
 
         # オプティマイザ（異なる学習率）
         backbone_params = []
