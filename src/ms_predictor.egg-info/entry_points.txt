@@ -1,0 +1,4 @@
+[console_scripts]
+ms-evaluate = scripts.evaluate:main
+ms-predict = scripts.predict:main
+ms-train = scripts.train:main
