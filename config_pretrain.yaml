@@ -29,6 +29,7 @@ model:
   spectrum_dim: 1000
   dropout: 0.15       # 0.1 → 0.15（過学習対策強化、より良い汎化性能）
   pooling: "mean"  # attention → mean (AttentionalAggregationは初回実行が極めて遅い)
+  use_gradient_checkpointing: true  # メモリ節約：中間活性化を逆伝播時に再計算
 
   # GCN固有の設定
   gcn:
@@ -92,13 +93,13 @@ finetuning:
   head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
   learning_rate: 0.001    # デフォルト学習率
 
-  # 訓練設定（30万化合物用に最適化 - 2025年最新ベストプラクティス適用）
-  batch_size: 128         # 64 → 128（実効バッチサイズ256でより安定した収束）
+  # 訓練設定（30万化合物用に最適化 - メモリ効率重視）
+  batch_size: 64          # 128 → 64（メモリ消費削減）
   num_epochs: 50          # 200 → 50（大規模データセット用）
-  num_workers: 8          # 6 → 8（データ読み込み高速化、persistent_workersで安定）
-  prefetch_factor: 4      # 2 → 4（より積極的な先読み）
-  persistent_workers: true  # ワーカーの永続化でエポック間の起動コスト削減
-  gradient_accumulation_steps: 2  # 1 → 2（実効バッチサイズ256、メモリ効率向上）
+  num_workers: 4          # 8 → 4（プリフェッチメモリを半減、メモリ逼迫対策）
+  prefetch_factor: 2      # 4 → 2（メモリ使用量削減：4workers × 2batches × 64samples = 512サンプル）
+  persistent_workers: false  # true → false（エポック毎にメモリ解放、Docker OOM対策）
+  gradient_accumulation_steps: 4  # 2 → 4（実効バッチサイズ256を維持、メモリ効率向上）
   weight_decay: 0.0001
 
   # スケジューラ設定（最新の研究に基づく最適化）
@@ -118,7 +119,7 @@ finetuning:
 
   # Stochastic Weight Averaging (SWA) - 汎化性能向上
   use_swa: true           # SWAを有効化（後半のエポックで重み平均化）
-  swa_start_epoch: 30     # 50エポック中の30エポック目からSWA開始
+  swa_start_epoch: 45     # 30 → 45（50エポック中の最後5エポックのみ、メモリ節約）
   swa_lr: 0.0001          # SWA時の学習率
 
   # 混合精度訓練
