@@ -35,17 +35,21 @@ logger = logging.getLogger(__name__)
 class FinetuneTrainer:
     """ファインチューニングトレーナー"""
 
-    def __init__(self, config_path: str, rebuild_cache: bool = False):
+    def __init__(self, config_path: str, rebuild_cache: bool = False, max_samples: int = None, random_seed: int = 42):
         """
         Args:
             config_path: 設定ファイルのパス
             rebuild_cache: キャッシュを再構築するかどうか
+            max_samples: ランダムサンプリングする最大サンプル数（Noneの場合は全て使用）
+            random_seed: ランダムシード
         """
         # 設定の読み込み
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
         self.rebuild_cache = rebuild_cache
+        self.max_samples = max_samples
+        self.random_seed = random_seed
 
         # デバイス設定とRTX 50互換性
         self.device = setup_rtx50_compatibility()
@@ -73,7 +77,9 @@ class FinetuneTrainer:
             mol_files_dir=self.config['data']['mol_files_dir'],
             max_mz=self.config['data']['max_mz'],
             mz_bin_size=self.config['data']['mz_bin_size'],
-            cache_file=cache_file
+            cache_file=cache_file,
+            max_samples=self.max_samples,
+            random_seed=self.random_seed
         )
 
         logger.info("Creating dataloaders...")
@@ -476,10 +482,19 @@ def main():
                         help='Path to config file')
     parser.add_argument('--rebuild-cache', action='store_true',
                         help='Rebuild the dataset cache from scratch')
+    parser.add_argument('--max-samples', type=int, default=None,
+                        help='Maximum number of samples to randomly select for finetuning (None = use all available)')
+    parser.add_argument('--random-seed', type=int, default=42,
+                        help='Random seed for sampling (default: 42)')
     args = parser.parse_args()
 
     # トレーナーの作成と実行
-    trainer = FinetuneTrainer(args.config, rebuild_cache=args.rebuild_cache)
+    trainer = FinetuneTrainer(
+        args.config,
+        rebuild_cache=args.rebuild_cache,
+        max_samples=args.max_samples,
+        random_seed=args.random_seed
+    )
     trainer.train()
 
 
