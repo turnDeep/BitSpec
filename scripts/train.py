@@ -56,7 +56,8 @@ class Trainer:
             mol_files_dir=self.config['data']['mol_files_dir'],
             max_mz=self.config['data']['max_mz'],
             mz_bin_size=self.config['data']['mz_bin_size'],
-            cache_file=str(Path(self.config['data']['output_dir']) / 'dataset_cache.pkl')
+            cache_file=str(Path(self.config['data']['output_dir']) / 'dataset_cache.pkl'),
+            use_functional_groups=self.config['model'].get('use_functional_groups', True)
         )
 
         logger.info("Creating dataloaders...")
@@ -81,7 +82,9 @@ class Trainer:
             pooling=self.config['model'].get('pooling', 'attention'),
             activation=self.config['model'].get('gcn', {}).get('activation', 'relu'),
             batch_norm=self.config['model'].get('gcn', {}).get('batch_norm', True),
-            residual=self.config['model'].get('gcn', {}).get('residual', True)
+            residual=self.config['model'].get('gcn', {}).get('residual', True),
+            use_functional_groups=self.config['model'].get('use_functional_groups', True),
+            num_functional_groups=self.config['model'].get('num_functional_groups', 48)
         ).to(self.device)
         
         # 損失関数

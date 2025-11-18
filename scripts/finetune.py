@@ -79,7 +79,8 @@ class FinetuneTrainer:
             mz_bin_size=self.config['data']['mz_bin_size'],
             cache_file=cache_file,
             max_samples=self.max_samples,
-            random_seed=self.random_seed
+            random_seed=self.random_seed,
+            use_functional_groups=self.config['model'].get('use_functional_groups', True)
         )
 
         logger.info("Creating dataloaders...")
@@ -106,7 +107,9 @@ class FinetuneTrainer:
             pooling=self.config['model'].get('pooling', 'attention'),
             activation=self.config['model'].get('gcn', {}).get('activation', 'relu'),
             batch_norm=self.config['model'].get('gcn', {}).get('batch_norm', True),
-            residual=self.config['model'].get('gcn', {}).get('residual', True)
+            residual=self.config['model'].get('gcn', {}).get('residual', True),
+            use_functional_groups=self.config['model'].get('use_functional_groups', True),
+            num_functional_groups=self.config['model'].get('num_functional_groups', 48)
         ).to(self.device)
 
         # 事前学習済みチェックポイントのロード
