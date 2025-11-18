@@ -118,13 +118,17 @@ class GCNMassSpecPredictor(nn.Module):
         activation: str = "relu",
         batch_norm: bool = True,
         residual: bool = True,
+        use_functional_groups: bool = True,
+        num_functional_groups: int = 48,
     ):
         super().__init__()
-        
+
         self.node_features = node_features
         self.hidden_dim = hidden_dim
         self.spectrum_dim = spectrum_dim
         self.pooling_type = pooling
+        self.use_functional_groups = use_functional_groups
+        self.num_functional_groups = num_functional_groups
         
         # 入力埋め込み層
         self.node_embedding = nn.Sequential(
@@ -182,19 +186,22 @@ class GCNMassSpecPredictor(nn.Module):
             self.pool = AttentionalAggregation(gate_nn, nn_transform)
         else:
             raise ValueError(f"Unknown pooling: {pooling}")
-        
+
         # マススペクトル予測ヘッド
+        # 官能基特徴量を使用する場合は入力次元を増やす
+        predictor_input_dim = hidden_dim + num_functional_groups if use_functional_groups else hidden_dim
+
         self.spectrum_predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.Linear(predictor_input_dim, hidden_dim * 2),
             nn.BatchNorm1d(hidden_dim * 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            
+
             nn.Linear(hidden_dim * 2, hidden_dim * 2),
             nn.BatchNorm1d(hidden_dim * 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            
+
             nn.Linear(hidden_dim * 2, spectrum_dim),
             nn.Sigmoid()  # 強度は0-1の範囲
         )
@@ -273,6 +280,7 @@ class GCNMassSpecPredictor(nn.Module):
                 - edge_index: エッジインデックス [2, E]
                 - edge_attr: エッジ特徴 [E, edge_features]
                 - batch: バッチインデックス [N]
+                - functional_groups: 官能基フィンガープリント [batch_size, num_functional_groups] (optional)
 
         Returns:
             予測マススペクトル [batch_size, spectrum_dim]
@@ -280,8 +288,15 @@ class GCNMassSpecPredictor(nn.Module):
         # グラフ特徴量を抽出
         graph_features = self.extract_graph_features(data)
 
+        # 官能基フィンガープリントの連結
+        if self.use_functional_groups and hasattr(data, 'functional_groups'):
+            # functional_groupsはバッチ化されたデータでは[batch_size, 48]の形状
+            combined_features = torch.cat([graph_features, data.functional_groups], dim=1)
+        else:
+            combined_features = graph_features
+
         # マススペクトル予測
-        spectrum = self.spectrum_predictor(graph_features)
+        spectrum = self.spectrum_predictor(combined_features)
 
         return spectrum
     
@@ -338,8 +353,14 @@ class GCNMassSpecPredictor(nn.Module):
             graph_features = self.pool(x, batch) if self.pooling_type != "attention" else self.pool(x, batch)
             attention_weights = None
 
+        # 官能基フィンガープリントの連結
+        if self.use_functional_groups and hasattr(data, 'functional_groups'):
+            combined_features = torch.cat([graph_features, data.functional_groups], dim=1)
+        else:
+            combined_features = graph_features
+
         # スペクトル予測
-        spectrum = self.spectrum_predictor(graph_features)
+        spectrum = self.spectrum_predictor(combined_features)
 
         if return_attention:
             return spectrum, attention_weights

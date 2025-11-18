@@ -16,7 +16,7 @@ import hashlib
 import json
 
 from .mol_parser import MOLParser, NISTMSPParser
-from .features import MolecularFeaturizer
+from .features import MolecularFeaturizer, SubstructureFeaturizer
 
 
 class MassSpecDataset(Dataset):
@@ -31,7 +31,8 @@ class MassSpecDataset(Dataset):
         cache_file: Optional[str] = None,
         transform=None,
         max_samples: Optional[int] = None,
-        random_seed: int = 42
+        random_seed: int = 42,
+        use_functional_groups: bool = True
     ):
         """
         Args:
@@ -43,6 +44,7 @@ class MassSpecDataset(Dataset):
             transform: データ変換関数
             max_samples: ランダムサンプリングする最大サンプル数（Noneの場合は全て使用）
             random_seed: ランダムシード
+            use_functional_groups: 官能基フィンガープリントを使用するか
         """
         self.msp_file = msp_file
         self.mol_files_dir = Path(mol_files_dir)
@@ -51,11 +53,16 @@ class MassSpecDataset(Dataset):
         self.transform = transform
         self.max_samples = max_samples
         self.random_seed = random_seed
+        self.use_functional_groups = use_functional_groups
 
         # パーサーと特徴量抽出器
         self.msp_parser = NISTMSPParser()
         self.mol_parser = MOLParser()
         self.featurizer = MolecularFeaturizer()
+
+        # 官能基フィンガープリント抽出器
+        if self.use_functional_groups:
+            self.substructure_featurizer = SubstructureFeaturizer()
 
         # キャッシュファイル名にmax_samplesを含める
         if cache_file and max_samples is not None:
@@ -79,7 +86,8 @@ class MassSpecDataset(Dataset):
                     if (metadata.get('max_samples') == max_samples and
                         metadata.get('random_seed') == random_seed and
                         metadata.get('max_mz') == max_mz and
-                        metadata.get('mz_bin_size') == mz_bin_size):
+                        metadata.get('mz_bin_size') == mz_bin_size and
+                        metadata.get('use_functional_groups') == use_functional_groups):
                         cache_valid = True
                         print(f"Cache valid: {len(self.data_list)} samples")
                     else:
@@ -106,6 +114,7 @@ class MassSpecDataset(Dataset):
                         'random_seed': random_seed,
                         'max_mz': max_mz,
                         'mz_bin_size': mz_bin_size,
+                        'use_functional_groups': use_functional_groups,
                         'num_samples': len(self.data_list)
                     }
                 }
@@ -158,6 +167,11 @@ class MassSpecDataset(Dataset):
 
                 # グラフデータに変換
                 graph_data = self.featurizer.mol_to_graph(mol, y=spectrum)
+
+                # 官能基フィンガープリントの追加
+                if self.use_functional_groups:
+                    fg_fingerprint = self.substructure_featurizer.get_substructure_fingerprint(mol)
+                    graph_data.functional_groups = torch.tensor(fg_fingerprint, dtype=torch.float32)
 
                 # メタデータ
                 metadata = {

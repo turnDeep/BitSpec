@@ -30,6 +30,10 @@ model:
   dropout: 0.15       # 0.1 → 0.15（過学習対策強化、より良い汎化性能）
   pooling: "mean"  # attention → mean (AttentionalAggregationは初回実行が極めて遅い)
 
+  # 官能基特徴量の設定
+  use_functional_groups: true  # 官能基フィンガープリントを使用するか
+  num_functional_groups: 48    # 官能基の数
+
   # GCN固有の設定
   gcn:
     conv_type: "GCNConv"

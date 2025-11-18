@@ -28,7 +28,11 @@ model:
   num_layers: 5
   dropout: 0.1
   pooling: "mean"  # mean, max, attention (チェックポイント互換のためmeanに変更)
-  
+
+  # 官能基特徴量の設定
+  use_functional_groups: true  # 官能基フィンガープリントを使用するか
+  num_functional_groups: 48    # 官能基の数
+
   # GCN固有の設定
   gcn:
     conv_type: "GCNConv"  # GCNConv, SAGEConv, GATConv
