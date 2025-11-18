@@ -11,6 +11,9 @@ from torch_geometric.data import Data, Batch
 from typing import List, Tuple, Optional, Dict
 import pickle
 from tqdm import tqdm
+import random
+import hashlib
+import json
 
 from .mol_parser import MOLParser, NISTMSPParser
 from .features import MolecularFeaturizer
@@ -26,7 +29,9 @@ class MassSpecDataset(Dataset):
         max_mz: int = 1000,
         mz_bin_size: float = 1.0,
         cache_file: Optional[str] = None,
-        transform=None
+        transform=None,
+        max_samples: Optional[int] = None,
+        random_seed: int = 42
     ):
         """
         Args:
@@ -36,63 +41,124 @@ class MassSpecDataset(Dataset):
             mz_bin_size: ビンサイズ
             cache_file: キャッシュファイルのパス
             transform: データ変換関数
+            max_samples: ランダムサンプリングする最大サンプル数（Noneの場合は全て使用）
+            random_seed: ランダムシード
         """
         self.msp_file = msp_file
         self.mol_files_dir = Path(mol_files_dir)
         self.max_mz = max_mz
         self.mz_bin_size = mz_bin_size
         self.transform = transform
-        
+        self.max_samples = max_samples
+        self.random_seed = random_seed
+
         # パーサーと特徴量抽出器
         self.msp_parser = NISTMSPParser()
         self.mol_parser = MOLParser()
         self.featurizer = MolecularFeaturizer()
-        
-        # キャッシュから読み込むか、新規に処理
+
+        # キャッシュファイル名にmax_samplesを含める
+        if cache_file and max_samples is not None:
+            cache_path = Path(cache_file)
+            cache_file = str(cache_path.parent / f"{cache_path.stem}_n{max_samples}{cache_path.suffix}")
+
+        # キャッシュの検証とロード
+        cache_valid = False
         if cache_file and Path(cache_file).exists():
             print(f"Loading cached data from {cache_file}...")
-            with open(cache_file, 'rb') as f:
-                self.data_list = pickle.load(f)
-        else:
+            try:
+                with open(cache_file, 'rb') as f:
+                    cached_data = pickle.load(f)
+
+                # キャッシュのメタデータを確認
+                if isinstance(cached_data, dict) and 'metadata' in cached_data:
+                    metadata = cached_data['metadata']
+                    self.data_list = cached_data['data_list']
+
+                    # 設定が一致するかチェック
+                    if (metadata.get('max_samples') == max_samples and
+                        metadata.get('random_seed') == random_seed and
+                        metadata.get('max_mz') == max_mz and
+                        metadata.get('mz_bin_size') == mz_bin_size):
+                        cache_valid = True
+                        print(f"Cache valid: {len(self.data_list)} samples")
+                    else:
+                        print("Cache configuration mismatch, rebuilding...")
+                else:
+                    # 古い形式のキャッシュ（メタデータなし）
+                    print("Old cache format detected, rebuilding...")
+            except Exception as e:
+                print(f"Error loading cache: {e}, rebuilding...")
+
+        if not cache_valid:
             print("Processing data...")
             self.data_list = self._process_data()
-            
+
             if cache_file:
                 print(f"Saving cache to {cache_file}...")
                 Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
+
+                # メタデータと共に保存
+                cache_data = {
+                    'data_list': self.data_list,
+                    'metadata': {
+                        'max_samples': max_samples,
+                        'random_seed': random_seed,
+                        'max_mz': max_mz,
+                        'mz_bin_size': mz_bin_size,
+                        'num_samples': len(self.data_list)
+                    }
+                }
+
                 with open(cache_file, 'wb') as f:
-                    pickle.dump(self.data_list, f)
-        
+                    pickle.dump(cache_data, f)
+
         print(f"Loaded {len(self.data_list)} samples")
     
     def _process_data(self) -> List[Tuple[Data, np.ndarray, Dict]]:
         """データを処理"""
-        data_list = []
-        
         # MSPファイルを解析
         compounds = self.msp_parser.parse_file(self.msp_file)
-        
-        for compound in tqdm(compounds, desc="Processing compounds"):
+
+        # 利用可能なmolファイルをフィルタリング
+        available_compounds = []
+        for compound in compounds:
+            compound_id = compound['ID']
+            mol_file = self.mol_files_dir / f"ID{compound_id}.MOL"
+            if mol_file.exists():
+                available_compounds.append(compound)
+
+        print(f"Found {len(available_compounds)} compounds with available MOL files")
+
+        # ランダムサンプリング
+        if self.max_samples is not None and self.max_samples < len(available_compounds):
+            random.seed(self.random_seed)
+            compounds_to_process = random.sample(available_compounds, self.max_samples)
+            print(f"Randomly sampling {self.max_samples} compounds (seed={self.random_seed})")
+        else:
+            compounds_to_process = available_compounds
+            if self.max_samples is not None:
+                print(f"Requested {self.max_samples} samples, but only {len(available_compounds)} available. Using all.")
+
+        data_list = []
+        for compound in tqdm(compounds_to_process, desc="Processing compounds"):
             try:
                 # MOLファイルを読み込み
                 compound_id = compound['ID']
                 mol_file = self.mol_files_dir / f"ID{compound_id}.MOL"
-                
-                if not mol_file.exists():
-                    continue
-                
+
                 mol = self.mol_parser.parse_file(str(mol_file))
-                
+
                 # スペクトルを正規化
                 spectrum = self.msp_parser.normalize_spectrum(
                     compound['Spectrum'],
                     max_mz=self.max_mz,
                     mz_bin_size=self.mz_bin_size
                 )
-                
+
                 # グラフデータに変換
                 graph_data = self.featurizer.mol_to_graph(mol, y=spectrum)
-                
+
                 # メタデータ
                 metadata = {
                     'name': compound.get('Name', ''),
@@ -101,13 +167,13 @@ class MassSpecDataset(Dataset):
                     'cas_no': compound.get('CASNO', ''),
                     'id': compound_id
                 }
-                
+
                 data_list.append((graph_data, spectrum, metadata))
-                
+
             except Exception as e:
                 print(f"Error processing compound {compound.get('ID', 'unknown')}: {e}")
                 continue
-        
+
         return data_list
     
     def __len__(self) -> int:
