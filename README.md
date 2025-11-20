@@ -340,24 +340,20 @@ Input (MOL/SMILES) → Molecular Graph → GCN Layers → Attention Pooling → 
 
 ## 損失関数
 
-Modified Cosine Lossを使用:
+Weighted Cosine Similarity Lossを使用:
 
 ```python
-ModifiedCosineLoss = 1 - (CosineSimilarity + ShiftedMatching) / 2
+WeightedCosineLoss = 1 - cosine_similarity(pred, target)
 ```
 
-- **通常のコサイン類似度**: スペクトル形状の基本的な類似性を評価
-- **Shifted Matching**: プリカーサーイオンの質量差を考慮したピークシフトマッチング
-  - Neutral loss（中性損失）を考慮してピークの対応関係を評価
-  - 許容誤差（tolerance）により柔軟なピークマッチングを実現
+- **コサイン類似度**: スペクトル形状の類似性を評価
+- EI-MSスペクトル予測に適した設計
+- 将来的にNIST標準の重み付け（m/z重み、強度重み）を追加可能
 
-この損失関数により、分子の構造的類似性とフラグメンテーションパターンの両方を効果的に学習できます。
+**注意**: EI-MSでは、MS/MSと異なり、Shifted Matching（Neutral loss考慮）は適用しません。
+EI-MSはイオン化と同時にフラグメンテーションが発生するため、明確なプリカーサー-フラグメント関係が存在しないためです。
 
-許容誤差は `config.yaml` で調整可能:
-```yaml
-training:
-  loss_tolerance: 0.1  # m/z単位での許容誤差
-```
+この損失関数により、NIST Mass Spectral Libraryと一貫性のある予測を実現します。
 
 ## 評価メトリクス
 
@@ -515,7 +511,7 @@ MIT License
   - 原子特徴量を157次元→48次元に最適化
   - 結合特徴量を16次元→6次元に最適化
   - MOL-NISTマッピングの厳密化
-  - ModifiedCosineLossに統一
+  - WeightedCosineLossに統一（EI-MS専用設計）
 
 - **v1.0.0** (2024): 初回リリース
   - GCNベースのマススペクトル予測モデル

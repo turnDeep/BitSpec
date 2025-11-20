@@ -37,6 +37,7 @@ tqdm>=4.66.0
 pyyaml>=6.0
 tensorboard>=2.15.0
 wandb>=0.16.0
+torch-ema>=0.3.0
 
 # 開発用
 pytest>=7.4.0
