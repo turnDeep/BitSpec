@@ -8,6 +8,7 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR, ReduceLROnPlateau
 from torch.optim.swa_utils import AveragedModel, SWALR
+from torch_ema import ExponentialMovingAverage
 import yaml
 from pathlib import Path
 import logging
@@ -263,6 +264,10 @@ class FinetuneTrainer:
         self.best_val_loss = float('inf')
         self.best_model_path = None
 
+        # EMA (Exponential Moving Average)
+        self.ema = ExponentialMovingAverage(self.model.parameters(), decay=0.999)
+        logger.info("EMA initialized with decay=0.999")
+
     def train_epoch(self, epoch: int) -> dict:
         """1エポックのトレーニング"""
         self.model.train()
@@ -308,6 +313,9 @@ class FinetuneTrainer:
                     self.scaler.update()
                     self.optimizer.zero_grad()
 
+                    # EMAパラメータの更新
+                    self.ema.update()
+
                     # OneCycleLRの場合はバッチごとにステップ
                     if hasattr(self, 'scheduler_step_on_batch') and self.scheduler_step_on_batch:
                         self.scheduler.step()
@@ -326,6 +334,9 @@ class FinetuneTrainer:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
+
+                    # EMAパラメータの更新
+                    self.ema.update()
 
                     # OneCycleLRの場合はバッチごとにステップ
                     if hasattr(self, 'scheduler_step_on_batch') and self.scheduler_step_on_batch:
@@ -349,33 +360,35 @@ class FinetuneTrainer:
         return {'loss': avg_loss}
 
     def validate(self, epoch: int) -> dict:
-        """検証"""
+        """検証（EMAパラメータを使用）"""
         self.model.eval()
         total_loss = 0
         all_metrics = []
 
-        with torch.no_grad():
-            for graphs, spectra, metadatas in tqdm(self.val_loader, desc="Validation"):
-                graphs = graphs.to(self.device)
-                spectra = spectra.to(self.device)
+        # EMAパラメータを使用
+        with self.ema.average_parameters():
+            with torch.no_grad():
+                for graphs, spectra, metadatas in tqdm(self.val_loader, desc="Validation"):
+                    graphs = graphs.to(self.device)
+                    spectra = spectra.to(self.device)
 
-                # 予測
-                if self.scaler:
-                    with torch.amp.autocast('cuda'):
+                    # 予測
+                    if self.scaler:
+                        with torch.amp.autocast('cuda'):
+                            pred_spectra = self.model(graphs)
+                            loss = self.criterion(pred_spectra, spectra)
+                    else:
                         pred_spectra = self.model(graphs)
                         loss = self.criterion(pred_spectra, spectra)
-                else:
-                    pred_spectra = self.model(graphs)
-                    loss = self.criterion(pred_spectra, spectra)
 
-                total_loss += loss.item()
+                    total_loss += loss.item()
 
-                # メトリクスの計算
-                metrics = calculate_metrics(
-                    pred_spectra.cpu().numpy(),
-                    spectra.cpu().numpy()
-                )
-                all_metrics.append(metrics)
+                    # メトリクスの計算
+                    metrics = calculate_metrics(
+                        pred_spectra.cpu().numpy(),
+                        spectra.cpu().numpy()
+                    )
+                    all_metrics.append(metrics)
 
         # 平均メトリクスの計算
         avg_loss = total_loss / len(self.val_loader)

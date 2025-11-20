@@ -14,9 +14,69 @@ from tqdm import tqdm
 import random
 import hashlib
 import json
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 from .mol_parser import MOLParser, NISTMSPParser
 from .features import MolecularFeaturizer, SubstructureFeaturizer
+
+
+def _process_single_compound(compound_info, mol_files_dir, max_mz, mz_bin_size, use_functional_groups):
+    """
+    単一化合物の処理（並列実行可能な関数）
+
+    Args:
+        compound_info: 化合物情報辞書
+        mol_files_dir: MOLファイルのディレクトリ
+        max_mz: 最大m/z値
+        mz_bin_size: ビンサイズ
+        use_functional_groups: 官能基フィンガープリントを使用するか
+
+    Returns:
+        (graph_data, spectrum, metadata) または None（エラー時）
+    """
+    try:
+        # パーサーと特徴量抽出器を初期化（各プロセスで個別に）
+        mol_parser = MOLParser()
+        msp_parser = NISTMSPParser()
+        featurizer = MolecularFeaturizer()
+
+        compound_id = compound_info['ID']
+        mol_file = mol_files_dir / f"ID{compound_id}.MOL"
+
+        # MOLファイルを読み込み
+        mol = mol_parser.parse_file(str(mol_file))
+
+        # スペクトルを正規化
+        spectrum = msp_parser.normalize_spectrum(
+            compound_info['Spectrum'],
+            max_mz=max_mz,
+            mz_bin_size=mz_bin_size
+        )
+
+        # グラフデータに変換
+        graph_data = featurizer.mol_to_graph(mol, y=spectrum)
+
+        # 官能基フィンガープリントの追加
+        if use_functional_groups:
+            substructure_featurizer = SubstructureFeaturizer()
+            fg_fingerprint = substructure_featurizer.get_substructure_fingerprint(mol)
+            graph_data.functional_groups = torch.tensor(fg_fingerprint, dtype=torch.float32)
+
+        # メタデータ
+        metadata = {
+            'name': compound_info.get('Name', ''),
+            'formula': compound_info.get('Formula', ''),
+            'mol_weight': compound_info.get('MW', 0),
+            'cas_no': compound_info.get('CASNO', ''),
+            'id': compound_id
+        }
+
+        return (graph_data, spectrum, metadata)
+
+    except Exception as e:
+        # エラーはNoneを返す（メインプロセスでフィルタリング）
+        return None
 
 
 class MassSpecDataset(Dataset):
@@ -125,7 +185,7 @@ class MassSpecDataset(Dataset):
         print(f"Loaded {len(self.data_list)} samples")
     
     def _process_data(self) -> List[Tuple[Data, np.ndarray, Dict]]:
-        """データを処理"""
+        """データを並列処理"""
         # MSPファイルを解析
         compounds = self.msp_parser.parse_file(self.msp_file)
 
@@ -149,44 +209,32 @@ class MassSpecDataset(Dataset):
             if self.max_samples is not None:
                 print(f"Requested {self.max_samples} samples, but only {len(available_compounds)} available. Using all.")
 
-        data_list = []
-        for compound in tqdm(compounds_to_process, desc="Processing compounds"):
-            try:
-                # MOLファイルを読み込み
-                compound_id = compound['ID']
-                mol_file = self.mol_files_dir / f"ID{compound_id}.MOL"
+        # 並列処理用の関数を準備
+        process_func = partial(
+            _process_single_compound,
+            mol_files_dir=self.mol_files_dir,
+            max_mz=self.max_mz,
+            mz_bin_size=self.mz_bin_size,
+            use_functional_groups=self.use_functional_groups
+        )
 
-                mol = self.mol_parser.parse_file(str(mol_file))
+        # 並列処理
+        num_workers = min(cpu_count(), 8)  # 最大8プロセス
+        print(f"Processing {len(compounds_to_process)} compounds with {num_workers} workers...")
 
-                # スペクトルを正規化
-                spectrum = self.msp_parser.normalize_spectrum(
-                    compound['Spectrum'],
-                    max_mz=self.max_mz,
-                    mz_bin_size=self.mz_bin_size
-                )
+        with Pool(processes=num_workers) as pool:
+            results = list(tqdm(
+                pool.imap(process_func, compounds_to_process),
+                total=len(compounds_to_process),
+                desc="Processing compounds (parallel)"
+            ))
 
-                # グラフデータに変換
-                graph_data = self.featurizer.mol_to_graph(mol, y=spectrum)
+        # Noneを除外（エラーがあった化合物）
+        data_list = [r for r in results if r is not None]
 
-                # 官能基フィンガープリントの追加
-                if self.use_functional_groups:
-                    fg_fingerprint = self.substructure_featurizer.get_substructure_fingerprint(mol)
-                    graph_data.functional_groups = torch.tensor(fg_fingerprint, dtype=torch.float32)
-
-                # メタデータ
-                metadata = {
-                    'name': compound.get('Name', ''),
-                    'formula': compound.get('Formula', ''),
-                    'mol_weight': compound.get('MW', 0),
-                    'cas_no': compound.get('CASNO', ''),
-                    'id': compound_id
-                }
-
-                data_list.append((graph_data, spectrum, metadata))
-
-            except Exception as e:
-                print(f"Error processing compound {compound.get('ID', 'unknown')}: {e}")
-                continue
+        error_count = len(results) - len(data_list)
+        if error_count > 0:
+            print(f"Warning: {error_count} compounds failed to process")
 
         return data_list
     

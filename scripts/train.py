@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch_ema import ExponentialMovingAverage
 import yaml
 from pathlib import Path
 import logging
@@ -110,10 +111,14 @@ class Trainer:
         # 保存ディレクトリ
         self.save_dir = Path(self.config['training']['checkpoint_dir'])
         self.save_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # ベストモデルの追跡
         self.best_val_loss = float('inf')
         self.best_model_path = None
+
+        # EMA (Exponential Moving Average)
+        self.ema = ExponentialMovingAverage(self.model.parameters(), decay=0.999)
+        logger.info("EMA initialized with decay=0.999")
     
     def train_epoch(self, epoch: int) -> dict:
         """1エポックのトレーニング"""
@@ -156,7 +161,10 @@ class Trainer:
             
             # プログレスバーの更新
             pbar.set_postfix({'loss': loss.item()})
-            
+
+            # EMAパラメータの更新
+            self.ema.update()
+
             # Weights & Biasesへのログ
             if self.config['training']['use_wandb']:
                 wandb.log({
@@ -164,39 +172,41 @@ class Trainer:
                     'train/lr': self.optimizer.param_groups[0]['lr'],
                     'epoch': epoch
                 })
-        
+
         avg_loss = total_loss / len(self.train_loader)
         return {'loss': avg_loss}
     
     def validate(self, epoch: int) -> dict:
-        """検証"""
+        """検証（EMAパラメータを使用）"""
         self.model.eval()
         total_loss = 0
         all_metrics = []
-        
-        with torch.no_grad():
-            for graphs, spectra, metadatas in tqdm(self.val_loader, desc="Validation"):
-                graphs = graphs.to(self.device)
-                spectra = spectra.to(self.device)
-                
-                # 予測
-                if self.scaler:
-                    with torch.amp.autocast('cuda'):
+
+        # EMAパラメータを使用
+        with self.ema.average_parameters():
+            with torch.no_grad():
+                for graphs, spectra, metadatas in tqdm(self.val_loader, desc="Validation"):
+                    graphs = graphs.to(self.device)
+                    spectra = spectra.to(self.device)
+
+                    # 予測
+                    if self.scaler:
+                        with torch.amp.autocast('cuda'):
+                            pred_spectra = self.model(graphs)
+                            loss = self.criterion(pred_spectra, spectra)
+                    else:
                         pred_spectra = self.model(graphs)
                         loss = self.criterion(pred_spectra, spectra)
-                else:
-                    pred_spectra = self.model(graphs)
-                    loss = self.criterion(pred_spectra, spectra)
-                
-                total_loss += loss.item()
-                
-                # メトリクスの計算
-                metrics = calculate_metrics(
-                    pred_spectra.cpu().numpy(),
-                    spectra.cpu().numpy()
-                )
-                all_metrics.append(metrics)
-        
+
+                    total_loss += loss.item()
+
+                    # メトリクスの計算
+                    metrics = calculate_metrics(
+                        pred_spectra.cpu().numpy(),
+                        spectra.cpu().numpy()
+                    )
+                    all_metrics.append(metrics)
+
         # 平均メトリクスの計算
         avg_loss = total_loss / len(self.val_loader)
         avg_metrics = {
@@ -204,11 +214,11 @@ class Trainer:
             for key in all_metrics[0].keys()
         }
         avg_metrics['loss'] = avg_loss
-        
+
         # Weights & Biasesへのログ
         if self.config['training']['use_wandb']:
             wandb.log({f'val/{k}': v for k, v in avg_metrics.items()})
-        
+
         return avg_metrics
     
     def save_checkpoint(self, epoch: int, metrics: dict, is_best: bool = False):
