@@ -1,24 +1,44 @@
-# BitSpec - AI-based Mass Spectrum Prediction for GC-MS
+# BitSpec - NEIMS v2.0: Neural EI-MS Prediction with Knowledge Distillation
 
-化学構造からマススペクトルを予測する深層学習システム。Graph Convolutional Network (GCN)を使用して、MOLファイルやSMILES文字列から質量スペクトルを生成します。
+次世代の電子衝撃イオン化マススペクトル（EI-MS）予測システム。Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテクチャを使用して、高精度かつ高速な質量スペクトル予測を実現します。
 
 ## 特徴
 
-- **Graph Convolutional Network**: 分子グラフの構造情報を効果的に学習
+- **Teacher-Student Knowledge Distillation**: 重いTeacherモデル（GNN+ECFP Hybrid）から軽量Studentモデル（MoE-Residual MLP）への知識転移
+- **Mixture of Experts (MoE)**: 4つの専門家ネットワーク（芳香族、脂肪族、複素環、一般）による効率的な予測
+- **Uncertainty-Aware Distillation**: MC Dropoutによる不確実性を考慮した知識蒸留
+- **Adaptive Loss Weighting**: GradNormによる自動損失バランシング
 - **MOL/MSP対応**: MOLファイルとNIST MSP形式の完全サポート
-- **RTX 50シリーズ対応**: 最新のNVIDIA RTX 50シリーズGPU (sm_120) に最適化
+- **RTX 50シリーズ対応**: RTX 5070 Ti (16GB)に最適化
 - **Mixed Precision Training**: FP16混合精度訓練による高速化とメモリ効率化
-- **Modified Cosine Loss**: Neutral lossを考慮したコサイン類似度損失関数
-- **Attention Pooling**: 重要な分子部分構造に注目する機構
-- **Dev Container対応**: 環境構築を簡素化するDev Container設定
+
+## 性能目標
+
+| メトリック | NEIMS v1.0 | NEIMS v2.0 (目標) | 改善率 |
+|--------|------------|------------------|-------|
+| Recall@10 | 91.8% | 95.5-96.0% | +3.7-4.2% |
+| Recall@5 | ~85% | 90-91% | +5-6% |
+| 推論速度 | 5ms | 8-12ms | 1.6-2.4x遅 |
+| GPU要件 | 不要 | 不要（推論時） | 同等 |
+| モデルサイズ | ~50MB | ~150MB | 3倍 |
 
 ## システム要件
 
-- Python 3.10+
-- CUDA 12.8+
-- PyTorch 2.7.0+
-- RTX 50シリーズGPU (推奨) またはその他のCUDA対応GPU
-- Docker (Dev Container使用時)
+### 推論環境（最小要件）
+- CPU: 4コア以上
+- RAM: 8GB以上
+- ストレージ: 500MB以上
+- OS: Linux/macOS/Windows
+
+### 学習環境（推奨構成）
+- **CPU**: AMD Ryzen 7700 (8コア/16スレッド)
+- **GPU**: NVIDIA RTX 5070 Ti (16GB VRAM)
+- **RAM**: 32GB DDR4/DDR5
+- **ストレージ**: 1TB SSD
+- **OS**: Ubuntu 20.04+ / Windows 11 with WSL2
+- **CUDA**: 12.8+
+- **PyTorch**: 2.7.0+
+- **Python**: 3.10+
 
 ## インストール
 
@@ -53,116 +73,149 @@ pip install -e .
 
 ```
 BitSpec/
-├── config.yaml              # 設定ファイル
-├── config_pretrain.yaml     # 事前学習設定ファイル
-├── requirements.txt         # 依存関係
-├── setup.py                # パッケージ設定
-├── README.md               # このファイル
-├── DEV_CONTAINER_GUIDE.md  # Dev Containerガイド
-├── PRETRAINING_PROPOSAL.md # 事前学習提案
-├── TECHNICAL_SUMMARY.md    # 技術サマリー
-├── QUICK_REFERENCE.md      # クイックリファレンス
-├── ANALYSIS_INDEX.md       # 分析インデックス
-├── ANALYSIS_PRETRAINING_INFRASTRUCTURE.md # 事前学習インフラ分析
-├── .devcontainer/          # Dev Container設定
+├── config.yaml                    # NEIMS v2.0 設定ファイル
+├── config_pretrain.yaml           # Teacher事前学習設定
+├── requirements.txt               # 依存関係
+├── setup.py                      # パッケージ設定
+├── README.md                     # このファイル
+├── .devcontainer/                # Dev Container設定
 ├── data/
-│   ├── NIST17.MSP          # NIST MSPファイル
-│   ├── mol_files/          # MOLファイルディレクトリ
-│   └── processed/          # 前処理済みデータ
-├── checkpoints/            # モデルチェックポイント
-│   ├── pretrain/          # 事前学習モデル
-│   └── finetune/          # ファインチューニングモデル
+│   ├── NIST17.msp                # NIST EI-MSスペクトル（~300,000スペクトル）
+│   ├── mol_files/                # 対応するMOLファイル
+│   ├── pcqm4mv2/                 # PCQM4Mv2データセット（事前学習用、自動ダウンロード）
+│   ├── massbank/                 # MassBank補助データ（オプション）
+│   └── processed/                # 前処理済みデータ
+├── checkpoints/
+│   ├── teacher/                  # Teacherモデル（GNN+ECFP Hybrid）
+│   │   ├── pretrained_teacher.pt       # 事前学習済みTeacher
+│   │   └── finetuned_teacher.pt        # ファインチューニング済みTeacher
+│   └── student/                  # Studentモデル（MoE-Residual MLP）
+│       └── distilled_student.pt        # 知識蒸留済みStudent
+├── docs/
+│   └── NEIMS_v2_SYSTEM_SPECIFICATION.md  # 完全システム仕様書
 ├── src/
-│   ├── data/              # データ処理
-│   │   ├── mol_parser.py  # MOL/MSPパーサー
-│   │   ├── features.py    # 分子特徴量抽出
-│   │   ├── dataset.py     # データセット
-│   │   ├── dataloader.py  # データローダー
-│   │   └── pcqm4mv2_loader.py # PCQM4Mv2データローダー
-│   ├── models/            # モデル定義
-│   │   └── gcn_model.py   # GCNモデル + 事前学習ヘッド
-│   ├── training/          # トレーニング
-│   │   └── loss.py        # 損失関数
-│   └── utils/             # ユーティリティ
-│       ├── metrics.py     # 評価メトリクス
-│       └── rtx50_compat.py # RTX 50互換性
+│   ├── data/                     # データ処理
+│   │   ├── mol_parser.py         # MOL/MSPパーサー
+│   │   ├── features.py           # 分子特徴量抽出（ECFP4, Count FP）
+│   │   ├── dataset.py            # データセット
+│   │   ├── augmentation.py       # データ拡張（LDS, Isotope）
+│   │   └── pcqm4mv2_loader.py    # PCQM4Mv2データローダー
+│   ├── models/                   # モデル定義
+│   │   ├── teacher.py            # Teacher（GNN+ECFP Hybrid）
+│   │   ├── student.py            # Student（MoE-Residual MLP）
+│   │   ├── moe.py               # Mixture of Experts
+│   │   └── modules.py           # 共通モジュール
+│   ├── training/                 # トレーニング
+│   │   ├── teacher_trainer.py    # Teacher学習ロジック
+│   │   ├── student_trainer.py    # Student知識蒸留ロジック
+│   │   ├── losses.py             # 損失関数（KD, Load Balancing, etc.）
+│   │   └── schedulers.py         # Temperature/LRスケジューラ
+│   ├── evaluation/               # 評価
+│   │   ├── metrics.py            # 評価メトリクス（Recall@K, etc.）
+│   │   └── visualize.py          # 結果可視化
+│   └── utils/
+│       ├── chemistry.py          # RDKitユーティリティ
+│       └── rtx50_compat.py       # RTX 50互換性
 └── scripts/
-    ├── train_pipeline.py       # 統合パイプライン（ダウンロード→事前学習→ファインチューニング）★推奨★
-    ├── pretrain.py             # PCQM4Mv2事前学習
-    ├── finetune.py             # ファインチューニング
-    ├── train.py                # スクラッチからのトレーニング
-    ├── predict.py              # 推論
-    ├── preprocess_data.py      # データ前処理
-    ├── test_training.py        # テストトレーニング
-    ├── test_data_loading.py    # データ読み込みテスト
-    └── test_mol_nist_mapping.py # MOL-NISTマッピングテスト
+    ├── train_teacher.py          # Teacher学習（Phase 1-2）
+    ├── train_student.py          # Student蒸留（Phase 3）
+    ├── train_pipeline.py         # 統合パイプライン ★推奨★
+    ├── evaluate.py               # 評価スクリプト
+    └── predict.py                # 推論スクリプト
 ```
 
 ## クイックスタート
 
-**推奨**: PCQM4Mv2事前学習とファインチューニングを使用したトレーニング
+NEIMS v2.0は3段階の学習プロセスで最高性能を達成します：
 
-### 1. 統合パイプラインの実行（推奨）
+### 学習フロー概要
 
-**完全なワークフロー（PCQM4Mv2ダウンロード→事前学習→ファインチューニング）を1コマンドで実行:**
+```
+Phase 1: Teacher事前学習 (PCQM4Mv2)
+   ↓
+Phase 2: Teacherファインチューニング (NIST EI-MS)
+   ↓
+Phase 3: Student知識蒸留 (Teacherから学習)
+   ↓
+最終モデル: 高精度・高速なStudent (Recall@10: 95.5%+, 推論: 10ms)
+```
+
+### 1. データの準備
+
+プロジェクトルートに以下のデータを配置:
+
+```
+BitSpec/
+├── data/
+│   ├── NIST17.msp          # NIST EI-MSスペクトルデータ
+│   ├── mol_files/          # 対応するMOLファイル
+│   │   ├── ID200001.MOL
+│   │   ├── ID200002.MOL
+│   │   └── ...
+│   └── pcqm4mv2/           # 自動ダウンロードされます
+```
+
+**PCQM4Mv2データセット**は初回実行時に自動ダウンロードされます（約3.74M分子、~20GB）。
+
+### 2. 統合パイプラインの実行（推奨）
+
+**完全なワークフロー（3段階）を1コマンドで実行:**
 
 ```bash
-python scripts/train_pipeline.py --config config_pretrain.yaml
+python scripts/train_pipeline.py --config config.yaml
 ```
 
 このコマンドは以下を自動的に実行します:
-1. **PCQM4Mv2データセット（約370万分子）のダウンロード**
-2. **事前学習**: 分子の量子化学的性質（HOMO-LUMO gap）を学習
-3. **ファインチューニング**: NIST EI-MSデータでマススペクトル予測に特化
+1. **Phase 1**: PCQM4Mv2データセットのダウンロードとTeacher事前学習（Bond Masking）
+2. **Phase 2**: NIST EI-MSデータでTeacherをファインチューニング（MC Dropout使用）
+3. **Phase 3**: TeacherからStudentへの知識蒸留（Uncertainty-Aware KD）
 
-**既にPCQM4Mv2をダウンロード済みの場合:**
+**推定学習時間（RTX 5070 Ti 16GB）:**
+- Phase 1 (Teacher事前学習): ~3-5日（50エポック）
+- Phase 2 (Teacherファインチューニング): ~12-18時間（100エポック）
+- Phase 3 (Student蒸留): ~8-12時間（150エポック）
+
+**メモリ最適化オプション:**
 
 ```bash
-python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download
-```
+# バッチサイズを小さくしてVRAM使用量を削減
+python scripts/train_pipeline.py --config config.yaml --batch-size 16
 
-**デバッグ用（小さなサブセットで高速テスト）:**
-
-```bash
-python scripts/train_pipeline.py --config config_pretrain.yaml --pretrain-subset 10000
-```
-
-### 2. データの準備
-
-NIST MSP形式のデータとMOLファイルを準備:
-
-```
-data/
-├── NIST17.MSP           # マススペクトルデータ
-└── mol_files/           # 対応するMOLファイル
-    ├── ID200001.MOL
-    ├── ID200002.MOL
-    └── ...
+# Mixed Precision（FP16）を使用してメモリ効率を向上
+python scripts/train_pipeline.py --config config.yaml --use-amp
 ```
 
 ### 3. 個別ステップの実行（オプション）
 
-統合パイプラインの代わりに、各ステップを個別に実行することも可能です:
+統合パイプラインの代わりに、各段階を個別に実行することも可能です:
 
-#### 3a. PCQM4Mv2事前学習
-
-```bash
-python scripts/pretrain.py --config config_pretrain.yaml
-```
-
-#### 3b. EI-MSファインチューニング
+#### Phase 1: Teacher事前学習（PCQM4Mv2）
 
 ```bash
-python scripts/finetune.py --config config_pretrain.yaml
+python scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain
 ```
 
-#### 3c. スクラッチからの学習（事前学習なし）
+このステップでは、GNN+ECFP HybridのTeacherモデルがPCQM4Mv2データセット（3.74M分子）でBond Masking タスクを学習します。
+
+#### Phase 2: Teacherファインチューニング（NIST EI-MS）
 
 ```bash
-python scripts/train.py --config config.yaml
+python scripts/train_teacher.py --config config.yaml --phase finetune \
+    --pretrained-checkpoint checkpoints/teacher/pretrained_teacher.pt
 ```
 
-### 4. 予測
+事前学習済みTeacherをNIST EI-MSデータでファインチューニングし、MC Dropoutによる不確実性推定を有効化します。
+
+#### Phase 3: Student知識蒸留
+
+```bash
+python scripts/train_student.py --config config.yaml \
+    --teacher-checkpoint checkpoints/teacher/finetuned_teacher.pt
+```
+
+MoE-Residual StudentモデルがTeacherから知識を学習します（Uncertainty-Aware KD、GradNorm適応重み付け）。
+
+### 4. 推論
 
 #### 単一分子の予測 (SMILES)
 
@@ -207,79 +260,67 @@ python scripts/predict.py \
 
 ## トレーニング戦略
 
-### PCQM4Mv2事前学習とファインチューニング（推奨）
+### 3段階学習プロセス
 
-BitSpecは、大規模分子データセット（PCQM4Mv2、約370万分子）での事前学習を**基本戦略**としています。量子化学的性質（HOMO-LUMO gap）を学習することで、より少ないEI-MSデータでも高性能なモデルを構築できます。
+NEIMS v2.0は、段階的な学習で最高性能を達成します:
 
-### 統合パイプラインの使用（最も簡単）
-
-**1コマンドで完全なワークフロー:**
-
-```bash
-python scripts/train_pipeline.py --config config_pretrain.yaml
-```
-
-**パイプラインのステップ:**
-1. ✅ **PCQM4Mv2自動ダウンロード**: OGBライブラリ経由で約370万分子をダウンロード
-2. ✅ **事前学習**: HOMO-LUMO gap予測タスクでGCNバックボーンを学習
-3. ✅ **ファインチューニング**: NIST EI-MSデータでマススペクトル予測に特化
-4. ✅ **モデル保存**: `checkpoints/finetune/best_finetuned_model.pt`
-
-**オプションフラグ:**
-
-```bash
-# ダウンロードをスキップ（既にダウンロード済み）
-python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download
-
-# 事前学習をスキップ（スクラッチから学習）
-python scripts/train_pipeline.py --config config_pretrain.yaml --skip-pretrain
-
-# デバッグ用（10,000サンプルのみで事前学習）
-python scripts/train_pipeline.py --config config_pretrain.yaml --pretrain-subset 10000
-
-# ファインチューニングのみ実行
-python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download --skip-pretrain
-```
-
-### 個別ステップの実行
-
-パイプラインの各ステップを個別に実行することも可能です:
-
-#### ステップ1: PCQM4Mv2事前学習
-
-```bash
-python scripts/pretrain.py --config config_pretrain.yaml
-```
-
-事前学習では以下を学習します：
-- **HOMO-LUMO gap予測**: 分子の電子的性質を理解
-- **分子グラフ表現**: 汎用的な化学構造の特徴抽出
-
-#### ステップ2: EI-MSファインチューニング
-
-```bash
-python scripts/finetune.py --config config_pretrain.yaml
-```
-
-ファインチューニングの戦略（`config_pretrain.yaml`）：
+#### Phase 1: Teacher事前学習（PCQM4Mv2）
 
 ```yaml
-finetuning:
-  pretrained_checkpoint: "checkpoints/pretrain/pretrained_backbone.pt"
-  freeze_backbone: false  # バックボーン全体を凍結しない
-  freeze_layers: 0        # 下位N層のみ凍結（0で凍結なし）
-  backbone_lr: 0.0001     # 事前学習済み層は低学習率
-  head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
+目的: ロバストな分子表現の学習
+データセット: PCQM4Mv2（3.74M分子）
+タスク: Bond Masking（自己教師あり学習）
+期間: 50エポック（RTX 5070 Ti: ~3-5日）
+最適化:
+  - Optimizer: AdamW
+  - Learning Rate: 1e-4
+  - Scheduler: CosineAnnealingWarmRestarts
+  - Gradient Clipping: 1.0
 ```
 
-### 事前学習の効果
+#### Phase 2: Teacherファインチューニング（NIST EI-MS）
 
-- **データ効率の向上**: 少ないEI-MSデータでも高性能
-- **汎化性能の向上**: 未知の分子に対するロバスト性
-- **学習の安定化**: より良い初期重みで収束が早い
-- **転移学習**: 量子化学の知識をマススペクトル予測に活用
+```yaml
+目的: スペクトル予測への特化
+データセット: NIST17.msp + mol_files（~300K スペクトル）
+タスク: MC Dropoutを用いたスペクトル予測
+期間: 100エポック（RTX 5070 Ti: ~12-18時間）
+最適化:
+  - Batch Size: 32
+  - Learning Rate: 1e-4
+  - MC Dropout Samples: 30（不確実性推定用）
+```
 
-詳細は [PRETRAINING_PROPOSAL.md](PRETRAINING_PROPOSAL.md) を参照してください。
+#### Phase 3: Student知識蒸留
+
+```yaml
+目的: 軽量で高速なモデルへの知識転移
+データセット: NIST（Teacherのソフトラベル付き）
+期間: 150エポック（RTX 5070 Ti: ~8-12時間）
+最適化:
+  - Batch Size: 32
+  - Learning Rate: 5e-4
+  - Scheduler: OneCycleLR
+  - GradNorm: 15エポック後に有効化
+  - Temperature: 4.0 → 1.0（Cosine Annealing）
+```
+
+### データ拡張
+
+- **Label Distribution Smoothing（LDS）**: Gaussian smoothing（σ=1.5 m/z）
+- **Isotope Substitution**: C12 → C13（5%の分子に適用）
+- **Conformer Generation**: Teacher事前学習のみ（3-5コンフォーマー）
+
+### リスク緩和策
+
+| リスク | 確率 | 対策 |
+|--------|------|------|
+| Expert collapse | 高 | Load balance + Entropy + Bias調整 |
+| 訓練不安定 | 中 | Warmup + Gradient clipping + Temperature annealing |
+| 過学習 | 中 | Dropout + Weight decay + Data augmentation |
+| GPU OOM | 中 | Gradient accumulation + Mixed precision |
+
+詳細は `docs/NEIMS_v2_SYSTEM_SPECIFICATION.md` を参照してください。
 
 ## Pythonスクリプトでの使用
 
@@ -316,63 +357,154 @@ predictor.export_to_msp(
 
 ## モデルアーキテクチャ
 
+### 全体構成
+
 ```
-Input (MOL/SMILES) → Molecular Graph → GCN Layers → Attention Pooling → MLP → Mass Spectrum
-                                          ↓
-                                   Feature Extraction
-                                   (Residual + BatchNorm)
+┌─────────────────────────────────────────────────────────────┐
+│                    TRAINING PHASE                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────────┐         ┌──────────────────┐         │
+│  │  Teacher Model   │         │  Student Model   │         │
+│  │  (GNN + ECFP)    │────────▶│  (MoE-Residual)  │         │
+│  │                  │ KD      │                  │         │
+│  │  - GINEConv x8   │         │  - 4 Experts     │         │
+│  │  - Bond-Breaking │         │  - Residual MLP  │         │
+│  │  - MC Dropout    │         │  - Gate Network  │         │
+│  └──────────────────┘         └──────────────────┘         │
+│         ▲                              ▲                    │
+│         │                              │                    │
+│         └──────────────┬───────────────┘                    │
+│                        │                                    │
+│                 ┌──────▼──────┐                            │
+│                 │  NIST17.msp │                            │
+│                 │  mol_files  │                            │
+│                 │  PCQM4Mv2   │                            │
+│                 └─────────────┘                            │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                   INFERENCE PHASE                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Input Molecule → ECFP4 + Count FP → Student Model         │
+│                                          ↓                   │
+│                                    Mass Spectrum             │
+│                                    (8-12ms latency)          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 詳細
+### Teacher Model（訓練のみ使用）
 
-- **入力**: 分子グラフ
-  - ノード特徴量: 48次元 (原子番号12D、次数8D、形式電荷8D、キラリティ5D、水素数6D、混成軌道7D、芳香族性1D、環情報1D)
-  - エッジ特徴量: 6次元 (結合タイプ4D、共役1D、環情報1D)
-- **GCN層**: 5層のGraph Convolutional層
-  - 各層にResidual接続とBatch Normalizationを適用
-  - 活性化関数: ReLU
-  - ドロップアウト: 0.1
-- **Attention Pooling**: グラフレベル表現の生成
-- **出力層**:
-  - Multi-Layer Perceptron (MLP)
-  - 出力: 1000次元のスペクトル (m/z 0-999)
-  - 活性化関数: Sigmoid (強度を0-1に正規化)
+- **GNN Branch**: GINEConv x 8層（hidden_dim: 256）
+  - Bond-Breaking Attention
+  - DropEdge (p=0.2) + PairNorm
+  - Global Pooling（Mean + Max + Attention）
+- **ECFP Branch**: ECFP4（4096-dim）→ MLP（512-dim）
+- **Fusion**: GNN (768-dim) + ECFP (512-dim) = 1280-dim
+- **Prediction Head**: 1280 → 1024 → 512 → 501（m/z 0-500）
+- **MC Dropout**: 30サンプルで不確実性推定
+
+**パラメータ数**: ~15M | **推論速度**: ~100ms
+
+### Student Model（本番使用）
+
+- **Input**: ECFP4（4096-dim）+ Count FP（2048-dim）= 6144-dim
+- **Gate Network**: 6144 → 512 → 128 → 4（Top-2 Routing）
+- **Expert Networks（x4）**: 各エキスパートは6つのResidual Blockで構成
+  - Expert 1: 芳香族化合物
+  - Expert 2: 脂肪族化合物
+  - Expert 3: 複素環化合物
+  - Expert 4: 一般/混合
+- **Fusion**: Expert出力の重み付き結合
+- **Prediction Head**: 6144 → 2048 → 1024 → 501（m/z 0-500）
+
+**パラメータ数**: ~50M | **推論速度**: ~10ms | **モデルサイズ**: ~200MB
 
 ## 損失関数
 
-Weighted Cosine Similarity Lossを使用:
+### Teacher Training Loss
 
 ```python
-WeightedCosineLoss = 1 - cosine_similarity(pred, target)
+L_teacher = L_spectrum + λ_bond * L_bond_masking
+
+L_spectrum = MSE(predicted_spectrum, target_spectrum)
+L_bond_masking = CrossEntropy(predicted_masked_bonds, true_masked_bonds)
 ```
 
-- **コサイン類似度**: スペクトル形状の類似性を評価
-- EI-MSスペクトル予測に適した設計
-- 将来的にNIST標準の重み付け（m/z重み、強度重み）を追加可能
+### Student Training Loss（完全版）
 
-**注意**: EI-MSでは、MS/MSと異なり、Shifted Matching（Neutral loss考慮）は適用しません。
-EI-MSはイオン化と同時にフラグメンテーションが発生するため、明確なプリカーサー-フラグメント関係が存在しないためです。
+```python
+L_student = (α * L_hard +           # Hard Label Loss (NIST Ground Truth)
+             β * L_soft +            # Soft Label Loss (Teacher with Uncertainty)
+             γ * L_feature +         # Feature-Level Distillation
+             δ_load * L_load +       # Load Balancing Loss
+             δ_entropy * L_entropy)  # Entropy Regularization
+```
 
-この損失関数により、NIST Mass Spectral Libraryと一貫性のある予測を実現します。
+#### 主要損失の詳細
+
+1. **L_hard**: NIST Ground Truthとの直接比較（MSE）
+2. **L_soft**: Teacherのソフトラベルとの比較（Confidence-Weighted MSE、Temperature Annealing）
+3. **L_feature**: Teacher-Student中間表現のアライメント
+4. **L_load**: MoEエキスパートの負荷分散（Switch Transformer方式）
+5. **L_entropy**: ゲートネットワークのエントロピー正則化
+
+### GradNorm適応重み付け
+
+- **Warmup期間（15エポック）**: 固定重み（α=0.3, β=0.5, γ=0.2）
+- **GradNorm期間（15エポック以降）**: 勾配ノルムに基づく動的調整
+- **Temperature Annealing**: T_init=4.0 → T_min=1.0（Cosineスケジュール）
 
 ## 評価メトリクス
 
-- **Cosine Similarity**: スペクトル形状の類似度 (主要指標)
-- **Pearson Correlation**: ピーク強度の相関係数
-- **MSE/MAE**: 予測誤差
-- **Top-K Accuracy**: 主要ピークの一致率
+### 主要メトリクス
 
-## RTX 50シリーズ対応
+- **Recall@K**: Top-Kピークの一致率（K=5, 10, 20）
+  - **目標**: Recall@10 ≥ 95.5%（ベースラインNEIMS: 91.8%）
+- **Spectral Similarity (Cosine)**: スペクトル全体の類似度
+- **MAE/RMSE**: ピーク強度の予測誤差
 
-このプロジェクトはNVIDIA RTX 50シリーズGPU (Blackwell, sm_120) に完全対応しています:
+### 効率性メトリクス
 
-- **PyTorch 2.7.0+**: sm_120アーキテクチャの公式サポート
+- **推論時間**: 平均ms/分子（目標: ≤ 10ms）
+- **スループット**: 分子数/秒
+- **メモリ使用量**: ピークGPU/RAM消費
+- **モデルサイズ**: ディスク容量（MB）
+
+### 専門メトリクス（NEIMS v2.0）
+
+- **Expert Usage Distribution**: 各エキスパートの使用頻度
+- **MC Dropout Uncertainty**: Teacher予測の不確実性
+- **KD Transfer Efficiency**: Teacherから Studentへの知識転移効率
+
+## ハードウェア最適化
+
+### RTX 5070 Ti（16GB VRAM）向け最適化
+
+本プロジェクトは RTX 5070 Ti に最適化されています:
+
 - **CUDA 12.8+**: 最新CUDA Toolkitによる最適化
-- **Mixed Precision Training**: FP16による高速化
-- **torch.compile**: JITコンパイルによる更なる高速化
-- **互換性レイヤー**: 必要に応じてsm_90エミュレーション
+- **Mixed Precision Training**: FP16による高速化とメモリ効率化
+- **Gradient Accumulation**: 実効バッチサイズを維持しながらメモリ削減
+- **PyTorch 2.7.0+**: sm_120アーキテクチャの公式サポート
 
-詳細は `src/utils/rtx50_compat.py` を参照。
+### メモリ使用量の目安（RTX 5070 Ti 16GB）
+
+| Phase | バッチサイズ | VRAM使用量 | 推奨設定 |
+|-------|------------|----------|---------|
+| Teacher事前学習 | 128 | ~14GB | batch_size=128, use_amp=true |
+| Teacherファインチューニング | 32 | ~12GB | batch_size=32, use_amp=true |
+| Student蒸留 | 32 | ~10GB | batch_size=32, use_amp=true |
+| 推論（Student） | 1 | ~2GB | CPU推論も可能 |
+
+### CPU/RAM最適化（Ryzen 7700、32GB RAM）
+
+- **データローダー**: num_workers=8（8コア/16スレッド活用）
+- **事前処理**: マルチプロセス並列化
+- **メモリ管理**: pin_memory=true（CUDA転送高速化）
+
+詳細は `src/utils/rtx50_compat.py` および `config.yaml` を参照。
 
 ## データ形式
 
@@ -471,12 +603,22 @@ pytest
 
 ## 参考文献
 
-- **NEIMS**: Neural EI-MS Prediction for Unknown Compound Identification
-- **ICEBERG/SCARF**: MIT Mass Spectrum Prediction
-- **Massformer**: Graph Transformer for Small Molecule Mass Spectra Prediction
-- **PCQM4Mv2**: Quantum Chemistry Structures and Properties of 134 kilo Molecules (OGB-LSC 2022)
-- **Transfer Learning with GNNs**: "Transfer learning with graph neural networks for improved molecular property prediction" (Nature Communications, 2024)
-- **Atom-level Pretraining**: "Pretraining graph transformers with atom-in-a-molecule quantum properties for improved ADMET modeling" (J. Cheminformatics, 2025)
+### NEIMS v2.0 関連
+
+1. **NEIMS v1.0**: Wei et al., "Rapid Prediction of Electron-Ionization Mass Spectrometry Using Neural Networks", *ACS Central Science*, 2019
+2. **GLNNs**: Zhang et al., "Graph-less Neural Networks: Teaching Old MLPs New Tricks via Distillation", *ICLR*, 2021
+3. **Switch Transformers (MoE)**: Fedus et al., "Switch Transformers: Scaling to Trillion Parameter Models", *JMLR*, 2022
+4. **GradNorm**: Chen et al., "GradNorm: Gradient Normalization for Adaptive Loss Balancing", *ICML*, 2018
+5. **MC Dropout**: Gal & Ghahramani, "Dropout as a Bayesian Approximation", *ICML*, 2016
+6. **Uncertainty-Aware KD**: "Teaching with Uncertainty: Unleashing the Potential of Knowledge Distillation", *CVPR*, 2024
+7. **FIORA**: "Local neighborhood-based prediction of compound mass spectra", *Nature Communications*, 2025
+8. **MolCLR**: Wang et al., "Molecular Contrastive Learning of Representations via Graph Neural Networks", *Nature MI*, 2022
+
+### データセット
+
+- **NIST EI-MS**: National Institute of Standards and Technology Mass Spectral Library
+- **PCQM4Mv2**: OGB Large-Scale Challenge Dataset（3.74M molecules）
+- **MassBank**: Community Mass Spectrometry Database
 
 ## ライセンス
 
@@ -493,28 +635,32 @@ MIT License
 
 ## 更新履歴
 
+- **v2.0.0** (2025-11-20): NEIMS v2.0 完全リアーキテクチャ
+  - **Teacher-Student Knowledge Distillation**: GNN+ECFP Teacher → MoE-Residual Student
+  - **Mixture of Experts (MoE)**: 4エキスパート（芳香族、脂肪族、複素環、一般）
+  - **Uncertainty-Aware Distillation**: MC Dropout + Confidence-Weighted KD
+  - **Adaptive Loss Weighting**: GradNorm + Temperature Annealing
+  - **3段階学習**: Teacher事前学習 → Teacherファインチューニング → Student蒸留
+  - **ハードウェア最適化**: RTX 5070 Ti (16GB) + Ryzen 7700 + 32GB RAM
+  - **目標性能**: Recall@10 ≥ 95.5%、推論時間 ≤ 10ms
+  - 完全システム仕様書追加（`docs/NEIMS_v2_SYSTEM_SPECIFICATION.md`）
+
 - **v1.3.0** (2025-11): 統合パイプライン追加
-  - `train_pipeline.py`: PCQM4Mv2ダウンロード→事前学習→ファインチューニングの統合スクリプト
+  - `train_pipeline.py`: PCQM4Mv2ダウンロード→事前学習→ファインチューニング
   - PCQM4Mv2自動ダウンロード機能（OGBライブラリ経由）
-  - README.mdを事前学習とファインチューニングを基本戦略とする内容に更新
   - 1コマンドで完全なワークフローを実行可能に
 
 - **v1.2.0** (2025-11): PCQM4Mv2事前学習対応
   - PCQM4Mv2データセットでの事前学習機能追加
   - ファインチューニングスクリプト実装
   - 転移学習のための凍結戦略サポート
-  - マルチタスク事前学習ヘッド追加
-  - PretrainHead/MultiTaskPretrainHead実装
-  - 詳細な技術文書追加（TECHNICAL_SUMMARY.md等）
 
 - **v1.1.0** (2025-11): 特徴量最適化
   - 原子特徴量を157次元→48次元に最適化
   - 結合特徴量を16次元→6次元に最適化
-  - MOL-NISTマッピングの厳密化
-  - WeightedCosineLossに統一（EI-MS専用設計）
+  - WeightedCosineLossに統一
 
 - **v1.0.0** (2024): 初回リリース
   - GCNベースのマススペクトル予測モデル
   - RTX 50シリーズ対応
   - MOL/MSP完全サポート
-  - Dev Container対応

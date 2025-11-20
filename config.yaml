@@ -1,104 +1,275 @@
 # config.yaml
-# マススペクトル予測システムの設定ファイル
+# NEIMS v2.0 システム設定ファイル
+# Teacher-Student Knowledge Distillation with MoE Architecture
 
 # プロジェクト設定
 project:
-  name: "MS_Predictor"
-  description: "GCN-based Mass Spectrum Prediction"
-  version: "1.0.0"
+  name: "NEIMS_v2"
+  description: "Neural EI-MS Prediction with Knowledge Distillation and MoE"
+  version: "2.0.0"
 
 # データ設定
 data:
-  nist_msp_path: "data/NIST17.MSP"
+  # NIST EI-MS データ
+  nist_msp_path: "data/NIST17.msp"
   mol_files_dir: "data/mol_files"
+
+  # PCQM4Mv2 事前学習データ（自動ダウンロード）
+  pcqm4mv2_path: "data/pcqm4mv2"
+
+  # 補助データ（オプション）
+  massbank_path: "data/massbank"  # Optional
+  gnps_path: "data/gnps"          # Optional
+
+  # 処理済みデータ
   output_dir: "data/processed"
+
+  # データ分割
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
-  max_mz: 1000
+
+  # スペクトル設定
+  max_mz: 500          # NEIMS v2.0: m/z 0-500
   mz_bin_size: 1.0
   min_intensity: 0.001
   
 # モデル設定
 model:
-  type: "GCN"  # GCN, GAT, GraphTransformer
-  node_features: 48  # 原子特徴量の次元 (features.pyに合わせて修正)
-  edge_features: 6   # 結合特徴量の次元 (features.pyに合わせて修正)
-  hidden_dim: 256
-  num_layers: 5
-  dropout: 0.1
-  pooling: "mean"  # mean, max, attention (チェックポイント互換のためmeanに変更)
+  # Teacher Model（GNN + ECFP Hybrid）
+  teacher:
+    type: "GNN_ECFP_Hybrid"
 
-  # 官能基特徴量の設定
-  use_functional_groups: true  # 官能基フィンガープリントを使用するか
-  num_functional_groups: 48    # 官能基の数
+    # GNN Branch
+    gnn:
+      conv_type: "GINEConv"      # GINEConv for edge features
+      num_layers: 8              # Deep GNN
+      hidden_dim: 256
+      edge_dim: 128
+      dropout: 0.3               # MC Dropout用
+      drop_edge: 0.2             # DropEdge for over-smoothing
+      use_pair_norm: true        # PairNorm
+      use_bond_breaking: true    # Bond-Breaking Attention
 
-  # GCN固有の設定
-  gcn:
-    conv_type: "GCNConv"  # GCNConv, SAGEConv, GATConv
-    activation: "relu"
-    batch_norm: true
-    residual: true
-  
-  # 出力層の設定
-  output:
-    spectrum_dim: 1000  # max_mz / mz_bin_size
-    use_log_transform: true
+    # ECFP Branch
+    ecfp:
+      fingerprint_size: 4096     # ECFP4
+      mlp_hidden: 1024
+      mlp_output: 512
+      dropout: 0.3
+
+    # Fusion
+    fusion_dim: 1280             # GNN(768) + ECFP(512)
+
+    # Prediction Head
+    prediction:
+      hidden_dims: [1024, 512]
+      output_dim: 501            # m/z 0-500
+      use_bidirectional: true    # NEIMS-style bidirectional
+
+    # MC Dropout
+    mc_dropout:
+      n_samples: 30              # Uncertainty estimation
+      dropout_rate: 0.3
+
+  # Student Model（MoE-Residual MLP）
+  student:
+    type: "MoE_Residual"
+
+    # Input
+    input_dim: 6144              # ECFP4(4096) + Count FP(2048)
+
+    # Gate Network
+    gate:
+      hidden_dims: [512, 128]
+      num_experts: 4
+      top_k: 2                   # Top-2 routing
+
+    # Expert Networks
+    experts:
+      num_experts: 4
+      residual_blocks_per_expert: 6
+      hidden_dim: 6144
+      activation: "gelu"
+      use_layer_norm: true
+
+    # Prediction Head
+    prediction:
+      hidden_dims: [2048, 1024]
+      output_dim: 501            # m/z 0-500
+      dropout: 0.2
+      use_bidirectional: true
+
+  # 共通設定
+  common:
+    spectrum_dim: 501            # m/z 0-500
+    node_features: 48            # Atom features
+    edge_features: 6             # Bond features
     
 # 訓練設定
 training:
-  batch_size: 32
-  num_epochs: 200
-  num_workers: 4
-  learning_rate: 0.001
-  weight_decay: 0.0001
-  scheduler: "cosine"  # step, cosine, plateau
-  scheduler_t0: 10
-  scheduler_tmult: 2
-  warmup_epochs: 10
-  gradient_clip: 1.0
-  use_amp: true
-  use_wandb: false
-  wandb_project: "ms-prediction"
-  checkpoint_dir: "checkpoints"
-  save_interval: 5
+  # Phase 1: Teacher事前学習（PCQM4Mv2）
+  teacher_pretrain:
+    dataset: "PCQM4Mv2"
+    task: "bond_masking"         # Self-supervised task
+    batch_size: 128              # RTX 5070 Ti: 16GB対応
+    num_epochs: 50
+    num_workers: 8               # Ryzen 7700: 8コア
+    prefetch_factor: 4
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-5
+    optimizer: "AdamW"
+    scheduler: "CosineAnnealingWarmRestarts"
+    scheduler_t0: 10
+    scheduler_tmult: 2
+    gradient_clip: 1.0
+    use_amp: true                # Mixed Precision
+    checkpoint_dir: "checkpoints/teacher"
+    save_interval: 10
 
-  # 早期終了
-  early_stopping:
-    patience: 20
-    min_delta: 0.0001
+  # Phase 2: Teacherファインチューニング（NIST EI-MS）
+  teacher_finetune:
+    dataset: "NIST_EIMS"
+    batch_size: 32               # MC Dropout用に小さめ
+    num_epochs: 100
+    num_workers: 8
+    prefetch_factor: 4
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-5
+    optimizer: "AdamW"
+    scheduler: "CosineAnnealingWarmRestarts"
+    scheduler_t0: 10
+    scheduler_tmult: 2
+    gradient_clip: 1.0
+    use_amp: true
+    mc_dropout_samples: 30       # Uncertainty estimation
+    checkpoint_dir: "checkpoints/teacher"
+    save_interval: 5
+    pretrained_checkpoint: "checkpoints/teacher/pretrained_teacher.pt"
 
-  # チェックポイント
-  checkpoint:
-    save_every: 5
-    keep_best: 3
+  # Phase 3: Student知識蒸留
+  student_distill:
+    dataset: "NIST_EIMS"
+    batch_size: 32
+    num_epochs: 150
+    num_workers: 8
+    prefetch_factor: 4
+    learning_rate: 5.0e-4        # Studentは高めの学習率
+    weight_decay: 1.0e-4
+    optimizer: "AdamW"
+    scheduler: "OneCycleLR"
+    max_lr: 1.0e-3
+    pct_start: 0.1               # 10% warmup
+    gradient_clip: 0.5
+    use_amp: true
+    checkpoint_dir: "checkpoints/student"
+    save_interval: 5
+    teacher_checkpoint: "checkpoints/teacher/finetuned_teacher.pt"
+
+    # Knowledge Distillation
+    distillation:
+      # Temperature Annealing
+      temperature_init: 4.0
+      temperature_min: 1.0
+      temperature_schedule: "cosine"
+
+      # Loss Weights（GradNorm用初期値）
+      alpha_init: 0.3            # Hard label loss
+      beta_init: 0.5             # Soft label loss
+      gamma_init: 0.2            # Feature distillation
+      delta_load: 0.01           # Load balancing
+      delta_entropy: 0.001       # Entropy regularization
+
+      # GradNorm
+      use_gradnorm: true
+      warmup_epochs: 15          # GradNorm開始エポック
+      gradient_clip_range: [0.5, 2.0]
+
+      # Label Distribution Smoothing
+      use_lds: true
+      lds_sigma: 1.5             # m/z units
+
+  # 共通設定
+  common:
+    use_wandb: false
+    wandb_project: "neims-v2"
+    log_interval: 10
+    val_interval: 1
+    early_stopping:
+      patience: 20
+      min_delta: 0.0001
     
-# GPU設定 (RTX 50シリーズ対応)
+# GPU設定（RTX 5070 Ti 16GB最適化）
 gpu:
   use_cuda: true
-  device_ids: [0]  # 使用するGPU ID
-  mixed_precision: true  # FP16混合精度訓練
-  compile: true  # torch.compile使用
-  compile_mode: "reduce-overhead"  # default, reduce-overhead, max-autotune
-  
+  device_ids: [0]
+  mixed_precision: true          # FP16混合精度訓練
+  compile: false                 # PyTorch Geometric との相性問題のため無効化
+  compile_mode: "default"
+
+  # メモリ最適化
+  memory_optimization:
+    gradient_accumulation_steps: 1  # 必要に応じて2-4に増やす
+    empty_cache_interval: 100       # N iterationごとにキャッシュクリア
+    pin_memory: true                # CUDA転送高速化
+
   # RTX 50シリーズ固有の設定
   rtx50:
-    enable_compat: true  # rtx50-compat使用
-    force_sm90_emulation: false  # sm_90エミュレーション
-    
+    enable_compat: true
+    force_sm90_emulation: false
+
+# CPU設定（Ryzen 7700最適化）
+cpu:
+  num_cores: 8                   # 物理コア数
+  num_threads: 16                # スレッド数
+  memory_limit_gb: 32            # RAM制限
+
 # ロギング設定
 logging:
   use_tensorboard: true
   use_wandb: false
-  log_dir: "logs"
-  wandb_project: "ms-prediction"
+  log_dir: "logs/neims_v2"
+  wandb_project: "neims-v2"
   log_every: 10
-  
+
 # 評価設定
 evaluation:
+  # 主要メトリクス
   metrics:
-    - "cosine_similarity"
+    - "recall_at_k"              # 主要指標
+    - "spectral_similarity"      # Cosine similarity
     - "mse"
     - "mae"
-    - "recall_at_k"
-  recall_k_values: [1, 5, 10, 20]
+    - "rmse"
+
+  # Recall@K設定
+  recall_k_values: [5, 10, 20]
+  recall_target: 0.955           # 目標: Recall@10 ≥ 95.5%
+
+  # 効率性メトリクス
+  measure_inference_time: true
+  measure_memory_usage: true
+
+  # NEIMS v2.0専門メトリクス
+  neims_v2_metrics:
+    expert_usage: true           # Expert使用分布
+    mc_dropout_uncertainty: true # MC Dropout不確実性
+    kd_efficiency: true          # KD転移効率
+
+# データ拡張
+augmentation:
+  # Label Distribution Smoothing
+  lds:
+    enabled: true
+    sigma: 1.5                   # m/z units
+
+  # Isotope Substitution
+  isotope:
+    enabled: true
+    probability: 0.05            # 5%の分子に適用
+    max_substitutions: 2         # 最大置換数
+
+  # Conformer Generation（Teacher事前学習のみ）
+  conformer:
+    enabled: true                # Pretrain onlyで有効化
+    num_conformers: 5            # 3-5コンフォーマー
