@@ -1,206 +1,255 @@
 # config_pretrain.yaml
-# PCQM4Mv2事前学習とファインチューニングの設定ファイル
+# NEIMS v2.0 Teacher事前学習設定ファイル
+# Phase 1: PCQM4Mv2事前学習（Bond Masking）
 
 # プロジェクト設定
 project:
-  name: "BitSpec_Pretrain"
-  description: "PCQM4Mv2 Pretraining for Mass Spectrum Prediction"
-  version: "1.0.0"
+  name: "NEIMS_v2_Teacher_Pretrain"
+  description: "Teacher GNN+ECFP Pretraining on PCQM4Mv2"
+  version: "2.0.0"
 
 # データ設定
 data:
-  nist_msp_path: "data/NIST17.MSP"
+  # PCQM4Mv2事前学習データ
+  pcqm4mv2_path: "data/pcqm4mv2"
+  auto_download: true           # 自動ダウンロード
+
+  # NIST EI-MSデータ（ファインチューニング用）
+  nist_msp_path: "data/NIST17.msp"
   mol_files_dir: "data/mol_files"
+
+  # 処理済みデータ
   output_dir: "data/processed"
+
+  # データ分割
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
-  max_mz: 1000
+
+  # スペクトル設定
+  max_mz: 500                   # NEIMS v2.0: m/z 0-500
   mz_bin_size: 1.0
   min_intensity: 0.001
 
-# モデル設定
+# Teacher Model設定（GNN + ECFP Hybrid）
 model:
-  type: "GCN"
-  node_features: 48   # BitSpecの現在の設定
-  edge_features: 6    # BitSpecの現在の設定
-  hidden_dim: 256
-  num_layers: 5
-  spectrum_dim: 1000
-  dropout: 0.15       # 0.1 → 0.15（過学習対策強化、より良い汎化性能）
-  pooling: "mean"  # attention → mean (AttentionalAggregationは初回実行が極めて遅い)
+  type: "GNN_ECFP_Hybrid"
 
-  # 官能基特徴量の設定
-  use_functional_groups: true  # 官能基フィンガープリントを使用するか
-  num_functional_groups: 48    # 官能基の数
+  # GNN Branch
+  gnn:
+    conv_type: "GINEConv"       # Edge features対応
+    num_layers: 8               # Deep GNN
+    hidden_dim: 256
+    edge_dim: 128
+    dropout: 0.3                # MC Dropout用
+    drop_edge: 0.2              # Over-smoothing防止
+    use_pair_norm: true         # PairNorm正規化
+    use_bond_breaking: true     # Bond-Breaking Attention
 
-  # GCN固有の設定
-  gcn:
-    conv_type: "GCNConv"
-    activation: "relu"
-    batch_norm: true
-    residual: true
+  # ECFP Branch
+  ecfp:
+    fingerprint_size: 4096      # ECFP4
+    mlp_hidden: 1024
+    mlp_output: 512
+    dropout: 0.3
 
-# 事前学習設定
+  # Fusion
+  fusion_dim: 1280              # GNN(768) + ECFP(512)
+
+  # Prediction Head
+  prediction:
+    hidden_dims: [1024, 512]
+    output_dim: 501             # m/z 0-500
+    use_bidirectional: true     # NEIMS-style
+
+  # MC Dropout（ファインチューニング時）
+  mc_dropout:
+    n_samples: 30
+    dropout_rate: 0.3
+
+  # 共通設定
+  common:
+    node_features: 48           # Atom features
+    edge_features: 6            # Bond features
+    spectrum_dim: 501
+
+# 事前学習設定（Phase 1）
 pretraining:
   # データセット設定
   dataset: "PCQM4Mv2"
-  data_path: "data/"
-  task: "homo_lumo_gap"  # homo_lumo_gap または multi_task
+  data_path: "data/pcqm4mv2"
+  task: "bond_masking"          # Self-supervised task
 
-  # 訓練設定（GPU使用率最適化）
-  # バッチサイズ調整ガイド：
-  # - RTX 5070 Ti (17GB): 512-1024推奨（安定性重視）
-  # - 大きすぎるバッチサイズは初回処理に時間がかかる
-  # - GPU使用率が低い場合: 段階的に増やす（768, 1024など）
-  batch_size: 512  # 2048 → 512 (初回バッチ処理を高速化、安定性向上)
-  num_epochs: 100
-  num_workers: 4  # 8 → 4 (HTTP 500エラー対策：同時接続数を削減)
-  prefetch_factor: 4  # 8 → 4 (HTTP 500エラー対策：同時プリフェッチを削減)
-  gradient_accumulation_steps: 4  # 1 → 4 (実効バッチサイズ2048を維持)
-  learning_rate: 0.001
-  weight_decay: 0.0001
+  # 訓練設定（RTX 5070 Ti 16GB最適化）
+  batch_size: 128               # 安定性重視
+  num_epochs: 50                # NEIMS v2.0仕様
+  num_workers: 8                # Ryzen 7700: 8コア
+  prefetch_factor: 4
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4         # AdamW推奨値
+  weight_decay: 1.0e-5
 
-  # スケジューラ
+  # Optimizer & Scheduler
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingWarmRestarts"
   scheduler_t0: 10
   scheduler_tmult: 2
+
+  # 正則化
+  gradient_clip: 1.0
+  dropout: 0.3
 
   # 混合精度訓練
   use_amp: true
 
   # 保存設定
-  checkpoint_dir: "checkpoints/pretrain"
+  checkpoint_dir: "checkpoints/teacher"
   save_interval: 10
 
-  # デバッグ用（小さなサブセットで試す場合）
-  use_subset: null  # 例: 10000 でテスト用に10000サンプルのみ使用
+  # データサブセット（デバッグ用）
+  use_subset: null              # 例: 10000
 
-  # Weights & Biases
+  # ロギング
   use_wandb: false
-  wandb_project: "bitspec-pretraining"
+  wandb_project: "neims-v2-teacher-pretrain"
 
-  # 学習する層の制御
-  freeze_layers: []  # 事前学習では全層を学習
+  # Bond Masking設定
+  bond_masking:
+    mask_ratio: 0.15            # 15%のbondをマスク
+    lambda_bond: 0.1            # Bond masking loss weight
 
-# ファインチューニング設定
+# ファインチューニング設定（Phase 2）
 finetuning:
   # 事前学習済みモデル
-  pretrained_checkpoint: "checkpoints/pretrain/pretrained_backbone.pt"
+  pretrained_checkpoint: "checkpoints/teacher/pretrained_teacher.pt"
 
-  # バックボーン凍結設定
-  freeze_backbone: false  # true: バックボーン全体を凍結
-  freeze_layers: 0        # 下位N層を凍結（0で凍結なし）
+  # データセット
+  dataset: "NIST_EIMS"
 
-  # 異なる学習率（30万化合物用に最適化）
-  backbone_lr: 0.0001     # 0.00005 → 0.0001（より積極的な学習）
-  head_lr: 0.001          # 新規層（spectrum_predictor）は高学習率
-  learning_rate: 0.001    # デフォルト学習率
+  # 訓練設定（RTX 5070 Ti 16GB最適化）
+  batch_size: 32                # MC Dropout用に小さめ
+  num_epochs: 100               # NEIMS v2.0仕様
+  num_workers: 8
+  prefetch_factor: 4
+  persistent_workers: true
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
 
-  # 訓練設定（30万化合物用に最適化 - 2025年最新ベストプラクティス適用）
-  batch_size: 128         # 64 → 128（実効バッチサイズ256でより安定した収束）
-  num_epochs: 50          # 200 → 50（大規模データセット用）
-  num_workers: 8          # 6 → 8（データ読み込み高速化、persistent_workersで安定）
-  prefetch_factor: 4      # 2 → 4（より積極的な先読み）
-  persistent_workers: true  # ワーカーの永続化でエポック間の起動コスト削減
-  gradient_accumulation_steps: 2  # 1 → 2（実効バッチサイズ256、メモリ効率向上）
-  weight_decay: 0.0001
+  # Optimizer & Scheduler
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingWarmRestarts"
+  scheduler_t0: 10
+  scheduler_tmult: 2
 
-  # スケジューラ設定（最新の研究に基づく最適化）
-  scheduler_type: "onecycle"  # OneCycleLR: より積極的な学習率スケジューリング
-  warmup_pct: 0.3         # OneCycleLR用：30%をwarmupに使用
-  div_factor: 25.0        # OneCycleLR用：初期学習率 = max_lr / div_factor
-  final_div_factor: 10000.0  # OneCycleLR用：最終学習率 = max_lr / final_div_factor
+  # 正則化
+  gradient_clip: 1.0
+  dropout: 0.3
 
-  # 従来のスケジューラー設定（scheduler_type="cosine_warmup"の場合）
-  warmup_epochs: 5        # 学習率warmup期間（エポック数）
-  scheduler_t0: 10        # CosineAnnealingWarmRestarts用
-  scheduler_tmult: 2      # CosineAnnealingWarmRestarts用
-
-  # Loss plateau対策
-  use_reduce_on_plateau: true  # Validation lossが改善しない場合に学習率を下げる
-  plateau_patience: 5     # 何エポック改善がなければ学習率を下げるか
-
-  # Stochastic Weight Averaging (SWA) - 汎化性能向上
-  use_swa: true           # SWAを有効化（後半のエポックで重み平均化）
-  swa_start_epoch: 30     # 50エポック中の30エポック目からSWA開始
-  swa_lr: 0.0001          # SWA時の学習率
+  # MC Dropout設定
+  mc_dropout:
+    enabled: true
+    n_samples: 30               # Uncertainty estimation
+    dropout_rate: 0.3
 
   # 混合精度訓練
   use_amp: true
 
   # 損失関数
-  loss_tolerance: 0.1
+  loss_function:
+    type: "MSE"
+    lambda_spectrum: 1.0
+    lambda_bond: 0.0            # Finetuning時はBond Maskingなし
 
   # 保存設定
-  checkpoint_dir: "checkpoints/finetune"
-  save_interval: 5        # 10 → 5（定期的な保存）
+  checkpoint_dir: "checkpoints/teacher"
+  save_interval: 5
 
-  # Weights & Biases（学習曲線の監視を推奨）
-  use_wandb: false         # wandb無効化
-  wandb_project: "bitspec-finetuning-300k"
+  # Early Stopping
+  early_stopping:
+    patience: 20
+    min_delta: 0.0001
 
-# GPU設定 (RTX 50シリーズ対応)
+  # ロギング
+  use_wandb: false
+  wandb_project: "neims-v2-teacher-finetune"
+
+  # データ拡張
+  augmentation:
+    lds:
+      enabled: true
+      sigma: 1.5                # m/z units
+    isotope:
+      enabled: true
+      probability: 0.05
+    conformer:
+      enabled: false            # Finetuning時は無効
+
+# GPU設定（RTX 5070 Ti 16GB最適化）
 gpu:
   use_cuda: true
   device_ids: [0]
   mixed_precision: true
-  # torch.compile: PyTorch Geometricとの相性が悪く、初回バッチで10-30分以上フリーズする
-  # PyTorch Geometricは既に最適化されたCUDAカーネルを使用しているため、compileは不要
-  compile: false  # true にすると初回バッチが極めて遅くなる（10-30分以上）
-  compile_mode: "default"  # "reduce-overhead"は更に遅い。使う場合は"default"を推奨
+  compile: false                # PyTorch Geometricとの相性問題
+  compile_mode: "default"
+
+  # メモリ最適化
+  memory_optimization:
+    gradient_accumulation_steps: 1
+    empty_cache_interval: 100
+    pin_memory: true
 
   # RTX 50シリーズ固有の設定
   rtx50:
     enable_compat: true
     force_sm90_emulation: false
 
+# CPU設定（Ryzen 7700最適化）
+cpu:
+  num_cores: 8
+  num_threads: 16
+  memory_limit_gb: 32
+
 # ロギング設定
 logging:
-  use_tensorboard: false
+  use_tensorboard: true
   use_wandb: false
-  log_dir: "logs"
+  log_dir: "logs/neims_v2_teacher"
   log_every: 10
 
 # 評価設定
 evaluation:
   metrics:
-    - "cosine_similarity"
+    - "recall_at_k"
+    - "spectral_similarity"
     - "mse"
     - "mae"
-    - "recall_at_k"
-  recall_k_values: [1, 5, 10, 20]
+    - "rmse"
+  recall_k_values: [5, 10, 20]
+  recall_target: 0.955          # 目標: Recall@10 ≥ 95.5%
 
-# ベンチマーク設定（実験用）
-benchmark:
-  # 比較実験
-  experiments:
-    - name: "random_init"
-      description: "ランダム初期化（ベースライン）"
-      use_pretrain: false
+  # 効率性メトリクス
+  measure_inference_time: true
+  measure_memory_usage: true
 
-    - name: "pretrain_homo_lumo"
-      description: "HOMO-LUMO gap事前学習"
-      use_pretrain: true
-      pretrain_task: "homo_lumo_gap"
+  # MC Dropout専用
+  mc_dropout_metrics:
+    uncertainty_calibration: true
+    epistemic_uncertainty: true
 
-    - name: "pretrain_multitask"
-      description: "マルチタスク事前学習"
-      use_pretrain: true
-      pretrain_task: "multi_task"
-
-  # データ量を変えた性能評価
-  data_fractions: [0.25, 0.5, 0.75, 1.0]
-
-  # 凍結戦略の比較
-  freeze_strategies:
-    - name: "no_freeze"
-      freeze_backbone: false
-      freeze_layers: 0
-
-    - name: "freeze_all"
-      freeze_backbone: true
-      freeze_layers: 0
-
-    - name: "freeze_3_layers"
-      freeze_backbone: false
-      freeze_layers: 3
+# ハードウェア仕様（参考情報）
+hardware:
+  cpu:
+    model: "AMD Ryzen 7700"
+    cores: 8
+    threads: 16
+  gpu:
+    model: "NVIDIA RTX 5070 Ti"
+    vram_gb: 16
+    architecture: "Blackwell (sm_120)"
+  memory:
+    ram_gb: 32
+    type: "DDR4/DDR5"
+  storage:
+    capacity_gb: 1000
+    type: "SSD"
