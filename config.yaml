@@ -63,9 +63,6 @@ training:
   checkpoint_dir: "checkpoints"
   save_interval: 5
 
-  # 損失関数の設定
-  loss_tolerance: 0.1  # ModifiedCosineLossのピークマッチング許容誤差
-
   # 早期終了
   early_stopping:
     patience: 20

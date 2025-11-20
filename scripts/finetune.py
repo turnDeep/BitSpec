@@ -19,7 +19,7 @@ import math
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.gcn_model import GCNMassSpecPredictor
-from src.training.loss import ModifiedCosineLoss
+from src.training.loss import WeightedCosineLoss
 from src.data.dataset import MassSpecDataset, NISTDataLoader
 from src.utils.rtx50_compat import setup_rtx50_compatibility
 from src.utils.metrics import calculate_metrics
@@ -155,9 +155,7 @@ class FinetuneTrainer:
             logger.warning("No pretrained checkpoint provided. Training from scratch.")
 
         # 損失関数
-        self.criterion = ModifiedCosineLoss(
-            tolerance=self.config['finetuning'].get('loss_tolerance', 0.1)
-        )
+        self.criterion = WeightedCosineLoss()
 
         # オプティマイザ（異なる学習率）
         backbone_params = []

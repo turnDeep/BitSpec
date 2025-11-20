@@ -13,7 +13,7 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.gcn_model import GCNMassSpecPredictor
-from src.training.loss import ModifiedCosineLoss
+from src.training.loss import WeightedCosineLoss
 from src.data.dataset import MassSpecDataset, NISTDataLoader
 from src.utils.rtx50_compat import setup_rtx50_compatibility
 from src.utils.metrics import calculate_metrics
@@ -88,9 +88,7 @@ class Trainer:
         ).to(self.device)
         
         # 損失関数
-        self.criterion = ModifiedCosineLoss(
-            tolerance=self.config['training'].get('loss_tolerance', 0.1)
-        )
+        self.criterion = WeightedCosineLoss()
         
         # オプティマイザ
         self.optimizer = AdamW(
