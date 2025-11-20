@@ -1,503 +1,330 @@
+#!/usr/bin/env python3
 # scripts/predict.py
-import os
-import sys
+"""
+NEIMS v2.0 Prediction Script
 
-# ヘッドレス環境用の環境変数設定（RDKitのX11依存を回避）
-os.environ['QT_QPA_PLATFORM'] = 'offscreen'
-os.environ['MPLBACKEND'] = 'Agg'
+Predict mass spectra using trained Student model (fast inference).
+Can also use Teacher model for uncertainty-aware predictions.
 
-import matplotlib
-matplotlib.use('Agg')  # ヘッドレス環境用のバックエンドを設定（X11不要）
+Usage:
+  # Single prediction
+  python scripts/predict.py --config config.yaml \\
+      --checkpoint checkpoints/student/best_student.pt --smiles 'CC(C)O'
 
-import torch
+  # Batch prediction
+  python scripts/predict.py --config config.yaml \\
+      --checkpoint checkpoints/student/best_student.pt --batch smiles_list.txt
+
+  # Use Teacher model (with uncertainty)
+  python scripts/predict.py --config config.yaml \\
+      --checkpoint checkpoints/teacher/best_finetune_teacher.pt \\
+      --model teacher --smiles 'CC(C)O'
+"""
+
+import argparse
 import yaml
-from pathlib import Path
+import torch
+import numpy as np
 import logging
+from pathlib import Path
 from rdkit import Chem
 from rdkit.Chem import AllChem
-from rdkit import RDLogger
-import matplotlib.pyplot as plt
-import numpy as np
-from io import BytesIO
-from PIL import Image
-import warnings
+from typing import Tuple, Optional
 
-# RDKitの警告を抑制
-RDLogger.DisableLog('rdApp.*')
+from src.models.student import StudentModel
+from src.models.teacher import TeacherModel
+from src.data.nist_dataset import mol_to_ecfp, mol_to_count_fp, mol_to_graph
 
-sys.path.append(str(Path(__file__).parent.parent))
-
-from src.models.gcn_model import GCNMassSpecPredictor
-from src.data.features import MolecularFeaturizer
-from src.utils.rtx50_compat import setup_rtx50_compatibility
-
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-class MassSpectrumPredictor:
-    """マススペクトル予測器"""
-    
-    def __init__(self, checkpoint_path: str, config_path: str):
+
+class SpectrumPredictor:
+    """NEIMS v2.0 Spectrum Predictor"""
+
+    def __init__(
+        self,
+        config_path: str,
+        checkpoint_path: str,
+        model_type: str = 'student',  # 'student' or 'teacher'
+        device: str = 'cuda'
+    ):
         """
         Args:
-            checkpoint_path: モデルチェックポイントのパス
-            config_path: 設定ファイルのパス
+            config_path: Config file path
+            checkpoint_path: Model checkpoint path
+            model_type: 'student' (fast) or 'teacher' (uncertainty-aware)
+            device: Device (cuda/cpu)
         """
-        # 設定の読み込み
-        with open(config_path, 'r') as f:
+        # Load config
+        with open(config_path) as f:
             self.config = yaml.safe_load(f)
 
-        # デバイス設定
-        self.device = setup_rtx50_compatibility()
+        self.model_type = model_type
+        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {self.device}")
 
-        # チェックポイントパスの検証と自動検出
-        checkpoint_path = self._find_checkpoint(checkpoint_path)
+        # Load model
+        if model_type == 'student':
+            self.model = StudentModel(self.config)
+        else:  # teacher
+            self.model = TeacherModel(self.config)
 
-        # モデルの読み込み（configからすべてのパラメータを取得）
-        self.model = GCNMassSpecPredictor(
-            node_features=self.config['model']['node_features'],
-            edge_features=self.config['model']['edge_features'],
-            hidden_dim=self.config['model']['hidden_dim'],
-            num_layers=self.config['model']['num_layers'],
-            spectrum_dim=self.config['data']['max_mz'],
-            dropout=self.config['model']['dropout'],
-            pooling=self.config['model'].get('pooling', 'mean'),  # チェックポイント互換性のためデフォルトはmean
-            conv_type=self.config['model'].get('gcn', {}).get('conv_type', 'GCNConv'),
-            activation=self.config['model'].get('gcn', {}).get('activation', 'relu'),
-            batch_norm=self.config['model'].get('gcn', {}).get('batch_norm', True),
-            residual=self.config['model'].get('gcn', {}).get('residual', True)
-        ).to(self.device)
+        # Load checkpoint
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
-        # チェックポイントの読み込み
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        if model_type == 'student':
+            self.model.load_state_dict(checkpoint['student_state_dict'])
+        else:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+
+        self.model.to(self.device)
         self.model.eval()
 
-        logger.info(f"Loaded model from {checkpoint_path}")
-        logger.info(f"Model trained for {checkpoint['epoch']} epochs")
-
-        # 特徴量化器
-        self.featurizer = MolecularFeaturizer()
+        logger.info(f"Loaded {model_type} model from {checkpoint_path}")
+        logger.info(f"Model epoch: {checkpoint.get('epoch', 'unknown')}")
 
         self.max_mz = self.config['data']['max_mz']
 
-    def _find_checkpoint(self, checkpoint_path: str) -> str:
+    def predict_from_smiles(
+        self,
+        smiles: str,
+        return_uncertainty: bool = False
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
-        チェックポイントファイルを探す
+        Predict spectrum from SMILES
 
         Args:
-            checkpoint_path: ユーザー指定のチェックポイントパス
+            smiles: SMILES string
+            return_uncertainty: Return uncertainty (Teacher only)
 
         Returns:
-            実際に存在するチェックポイントパス
-
-        Raises:
-            FileNotFoundError: チェックポイントが見つからない場合
+            spectrum: Predicted spectrum [501]
+            uncertainty: Uncertainty (if Teacher + return_uncertainty) [501]
         """
-        # パスのリストを作成（優先順位順）
-        candidate_paths = [
-            checkpoint_path,  # ユーザー指定のパス
-            "checkpoints/finetune/best_finetuned_model.pt",  # ファインチューニング後のベストモデル
-            "checkpoints/pretrain/pretrained_backbone.pt",  # 事前学習済みバックボーン
-            "checkpoints/best_model.pt",  # 旧形式
-            "/workspace/checkpoints/finetune/best_finetuned_model.pt",  # Dockerコンテナ内
-            "/workspace/checkpoints/best_model.pt",  # Dockerコンテナ内（旧形式）
-        ]
-
-        # 絶対パスに変換して検索
-        for path_str in candidate_paths:
-            path = Path(path_str)
-            if path.exists():
-                logger.info(f"Found checkpoint at: {path}")
-                return str(path)
-
-        # どこにも見つからない場合はエラー
-        error_msg = (
-            f"チェックポイントファイルが見つかりません。\n"
-            f"以下の場所を確認しました:\n"
-        )
-        for path in candidate_paths:
-            error_msg += f"  - {path}\n"
-        error_msg += (
-            f"\n解決方法:\n"
-            f"1. モデルのトレーニングを実行してください:\n"
-            f"   python scripts/pretrain.py --config config_pretrain.yaml\n"
-            f"   python scripts/finetune.py --config config_pretrain.yaml\n"
-            f"2. または、正しいチェックポイントパスを --checkpoint オプションで指定してください\n"
-        )
-        raise FileNotFoundError(error_msg)
-    
-    def predict_from_smiles(self, smiles: str) -> np.ndarray:
-        """
-        SMILESから質量スペクトルを予測
-
-        Args:
-            smiles: SMILES文字列
-
-        Returns:
-            予測スペクトル (max_mz,)
-        """
-        # SMILESから分子オブジェクトを作成
+        # Parse molecule
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             raise ValueError(f"Invalid SMILES: {smiles}")
 
-        # 3D座標の生成（明示的水素を追加してから）
-        try:
-            mol = Chem.AddHs(mol)
-            AllChem.EmbedMolecule(mol, randomSeed=42)
-            AllChem.MMFFOptimizeMolecule(mol)
-        except:
-            logger.warning("Could not generate 3D coordinates")
+        if self.model_type == 'student':
+            # Student: ECFP + Count FP
+            ecfp = mol_to_ecfp(mol)
+            count_fp = mol_to_count_fp(mol)
 
-        # 分子グラフの特徴量化
-        graph_data = self.featurizer.mol_to_graph(mol)
-        graph_data = graph_data.to(self.device)
+            # Concatenate
+            input_fp = np.concatenate([ecfp, count_fp])
+            input_tensor = torch.tensor(input_fp, dtype=torch.float32).unsqueeze(0)
+            input_tensor = input_tensor.to(self.device)
 
-        # 予測
-        with torch.no_grad():
-            if self.config['training']['use_amp']:
-                with torch.amp.autocast('cuda'):
-                    pred_spectrum = self.model(graph_data)
-            else:
-                pred_spectrum = self.model(graph_data)
+            # Predict
+            with torch.no_grad():
+                spectrum = self.model(input_tensor)
 
-        # NumPy配列に変換し、バッチ次元を削除
-        result = pred_spectrum.cpu().numpy()
-        # 2次元以上の場合は1次元にする
-        if result.ndim > 1:
-            result = result.squeeze()
-        return result
-    
-    def predict_from_mol_file(self, mol_path: str) -> np.ndarray:
+            spectrum = spectrum.squeeze().cpu().numpy()
+            return spectrum, None
+
+        else:  # teacher
+            # Teacher: Graph + ECFP
+            graph = mol_to_graph(mol).to(self.device)
+            ecfp = torch.tensor(mol_to_ecfp(mol), dtype=torch.float32).unsqueeze(0)
+            ecfp = ecfp.to(self.device)
+
+            # Add batch to graph
+            graph.batch = torch.zeros(graph.x.size(0), dtype=torch.long, device=self.device)
+
+            with torch.no_grad():
+                if return_uncertainty:
+                    # MC Dropout for uncertainty
+                    spectrum, uncertainty = self.model.predict_with_uncertainty(
+                        graph, ecfp, n_samples=30
+                    )
+                    return spectrum.cpu().numpy(), uncertainty.cpu().numpy()
+                else:
+                    spectrum = self.model(graph, ecfp)
+                    return spectrum.squeeze().cpu().numpy(), None
+
+    def predict_batch(
+        self,
+        smiles_list: list,
+        batch_size: int = 32
+    ) -> np.ndarray:
         """
-        MOLファイルから質量スペクトルを予測
-        
+        Batch prediction
+
         Args:
-            mol_path: MOLファイルのパス
-            
+            smiles_list: List of SMILES strings
+            batch_size: Batch size
+
         Returns:
-            予測スペクトル
+            spectra: Predicted spectra [N, 501]
         """
-        mol = Chem.MolFromMolFile(mol_path)
-        if mol is None:
-            raise ValueError(f"Could not read molecule from {mol_path}")
-        
-        smiles = Chem.MolToSmiles(mol)
-        return self.predict_from_smiles(smiles)
-    
-    def predict_batch(self, smiles_list: list) -> np.ndarray:
-        """
-        複数のSMILESから一括予測
-        
-        Args:
-            smiles_list: SMILES文字列のリスト
-            
-        Returns:
-            予測スペクトル (batch_size, max_mz)
-        """
-        from torch_geometric.data import Batch
-        
-        # 各SMILESをグラフデータに変換
-        graphs = []
-        for smiles in smiles_list:
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is None:
-                logger.warning(f"Invalid SMILES: {smiles}")
-                continue
-            
-            try:
-                mol = Chem.AddHs(mol)
-                AllChem.EmbedMolecule(mol, randomSeed=42)
-                AllChem.MMFFOptimizeMolecule(mol)
-            except:
-                pass
+        all_spectra = []
 
-            graph_data = self.featurizer.mol_to_graph(mol)
-            graphs.append(graph_data)
-        
-        if not graphs:
-            raise ValueError("No valid molecules in batch")
-        
-        # バッチ化
-        batch = Batch.from_data_list(graphs).to(self.device)
-        
-        # 予測
-        with torch.no_grad():
-            if self.config['training']['use_amp']:
-                with torch.amp.autocast('cuda'):
-                    pred_spectra = self.model(batch)
-            else:
-                pred_spectra = self.model(batch)
-        
-        return pred_spectra.cpu().numpy()
-    
-    def visualize_prediction(self, smiles: str, true_spectrum: np.ndarray = None,
-                           save_path: str = None):
-        """
-        予測結果の可視化
+        for i in range(0, len(smiles_list), batch_size):
+            batch_smiles = smiles_list[i:i + batch_size]
+            logger.info(f"Processing batch {i // batch_size + 1}/{(len(smiles_list) + batch_size - 1) // batch_size}")
 
-        Args:
-            smiles: SMILES文字列
-            true_spectrum: 真のスペクトル（オプション）
-            save_path: 保存先パス（オプション）
-        """
-        # matplotlibの警告を抑制
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=UserWarning, message='.*non-interactive.*')
-            warnings.filterwarnings('ignore', category=UserWarning, message='.*FigureCanvasAgg.*')
-
-            # 予測
-            pred_spectrum = self.predict_from_smiles(smiles)
-
-            # 相対強度に正規化（最大値を1.0にする）
-            max_pred = np.max(pred_spectrum)
-            if max_pred > 0:
-                pred_spectrum = pred_spectrum / max_pred
-
-            # 真のスペクトルも正規化（提供されている場合）
-            if true_spectrum is not None:
-                max_true = np.max(true_spectrum)
-                if max_true > 0:
-                    true_spectrum = true_spectrum / max_true
-
-            # 分子構造の描画
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is None:
-                raise ValueError(f"Invalid SMILES: {smiles}")
-            # 描画用に明示的水素を追加
-            mol_with_h = Chem.AddHs(mol)
-
-            fig = plt.figure(figsize=(15, 10))
-
-            # 分子構造（ヘッドレス環境対応）
-            ax1 = plt.subplot(2, 1, 1)
-            img = None
-
-            # 複数の描画方法を試す（ヘッドレス環境対応）
-            try:
-                # 方法1: rdMolDraw2D (PNG) - X11不要
-                from rdkit.Chem.Draw import rdMolDraw2D
-                drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
-                drawer.DrawMolecule(mol_with_h)
-                drawer.FinishDrawing()
-                img_data = drawer.GetDrawingText()
-                img = Image.open(BytesIO(img_data))
-                logger.debug("Drew molecule using MolDraw2DCairo")
-            except Exception as e1:
-                logger.debug(f"MolDraw2DCairo failed: {e1}")
+            batch_spectra = []
+            for smiles in batch_smiles:
                 try:
-                    # 方法2: SVGベースの描画
-                    from rdkit.Chem.Draw import rdMolDraw2D
-                    drawer = rdMolDraw2D.MolDraw2DSVG(400, 400)
-                    drawer.DrawMolecule(mol_with_h)
-                    drawer.FinishDrawing()
-                    svg_data = drawer.GetDrawingText()
-                    # SVGをPNGに変換（cairosvgが必要だが、なければスキップ）
-                    try:
-                        import cairosvg
-                        png_data = cairosvg.svg2png(bytestring=svg_data.encode('utf-8'))
-                        img = Image.open(BytesIO(png_data))
-                        logger.debug("Drew molecule using SVG")
-                    except ImportError:
-                        logger.debug("cairosvg not available, skipping SVG rendering")
-                except Exception as e2:
-                    logger.debug(f"SVG drawing failed: {e2}")
+                    spectrum, _ = self.predict_from_smiles(smiles)
+                    batch_spectra.append(spectrum)
+                except Exception as e:
+                    logger.warning(f"Failed to predict {smiles}: {e}")
+                    batch_spectra.append(np.zeros(self.max_mz + 1))
 
-            # フォールバック: 分子構造なしでSMILES文字列のみ表示
-            if img is None:
-                logger.warning("Could not draw molecule structure, using text only")
-                img = Image.new('RGB', (400, 400), color='white')
+            all_spectra.extend(batch_spectra)
 
-            ax1.imshow(img)
-            ax1.axis('off')
-            ax1.set_title(f'Molecule: {smiles}', fontsize=12, pad=10)
+        return np.array(all_spectra)
 
-            # スペクトル
-            ax2 = plt.subplot(2, 1, 2)
-
-            mz_values = np.arange(self.max_mz)
-
-            # 予測スペクトル
-            ax2.stem(mz_values, pred_spectrum, linefmt='b-', markerfmt='bo',
-                    basefmt=' ', label='Predicted')
-
-            # 真のスペクトル（あれば）
-            if true_spectrum is not None:
-                ax2.stem(mz_values, true_spectrum, linefmt='r-', markerfmt='ro',
-                        basefmt=' ', label='True', alpha=0.5)
-
-                # 類似度の計算
-                cosine_sim = np.dot(pred_spectrum, true_spectrum) / \
-                            (np.linalg.norm(pred_spectrum) * np.linalg.norm(true_spectrum))
-                ax2.text(0.02, 0.98, f'Cosine Similarity: {cosine_sim:.4f}',
-                        transform=ax2.transAxes, fontsize=12,
-                        verticalalignment='top',
-                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-            ax2.set_xlabel('m/z', fontsize=12)
-            ax2.set_ylabel('Relative Intensity', fontsize=12)
-            ax2.set_title('Mass Spectrum', fontsize=14, pad=10)
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-            ax2.set_xlim(0, self.max_mz)
-            ax2.set_ylim(0, 1.05)
-
-            plt.tight_layout()
-
-            if save_path:
-                plt.savefig(save_path, dpi=300, bbox_inches='tight')
-                logger.info(f"Saved visualization to {save_path}")
-
-            # Non-interactive environment - close figure without showing
-            plt.close(fig)
-    
-    def find_significant_peaks(self, spectrum: np.ndarray,
-                             threshold: float = 0.05,
-                             top_n: int = 20) -> list:
+    def find_top_peaks(
+        self,
+        spectrum: np.ndarray,
+        top_n: int = 20,
+        threshold: float = 0.01
+    ) -> list:
         """
-        有意なピークを検出
+        Find top peaks in spectrum
 
         Args:
-            spectrum: スペクトルデータ
-            threshold: 強度の閾値
-            top_n: 上位N個のピーク
+            spectrum: Spectrum array
+            top_n: Number of top peaks
+            threshold: Minimum intensity threshold
 
         Returns:
-            [(mz, intensity), ...] のリスト
+            peaks: List of (m/z, intensity) tuples
         """
-        # 配列を1次元にフラット化
-        spectrum = np.atleast_1d(spectrum).flatten()
+        # Filter by threshold
+        mask = spectrum > threshold
+        indices = np.where(mask)[0]
 
-        # 閾値以上のピークを検出
-        peak_mask = spectrum > threshold
-        peak_indices = np.where(peak_mask)[0]
-
-        # ピークが見つからない場合
-        if len(peak_indices) == 0:
-            logger.warning("No peaks found above threshold")
+        if len(indices) == 0:
             return []
 
-        # ピーク位置での強度を取得
-        peak_intensities = spectrum[peak_indices]
+        intensities = spectrum[indices]
 
-        # 強度でソート（降順）
-        sorted_order = np.argsort(peak_intensities)[::-1]
+        # Sort by intensity
+        sorted_idx = np.argsort(intensities)[::-1]
 
-        # 上位N個を取得
-        n_peaks = min(len(sorted_order), top_n)
+        # Top N
+        n = min(len(sorted_idx), top_n)
+        peaks = [(int(indices[sorted_idx[i]]), float(intensities[sorted_idx[i]]))
+                 for i in range(n)]
 
-        # ソート済みのインデックスを使って、元のm/z位置と強度を取得
-        top_peaks = []
-        for i in range(n_peaks):
-            idx = sorted_order[i]  # peak_intensities内でのインデックス
-            mz = int(peak_indices[idx])  # 元のスペクトル内でのm/z位置
-            intensity = float(peak_intensities[idx])  # その位置での強度
-            top_peaks.append((mz, intensity))
+        return peaks
 
-        return top_peaks
-    
-    def export_to_msp(self, smiles: str, output_path: str, 
-                     compound_name: str = None):
+    def export_msp(
+        self,
+        smiles: str,
+        output_path: str,
+        compound_name: Optional[str] = None
+    ):
         """
-        予測結果をMSP形式でエクスポート
-        
+        Export prediction to MSP format
+
         Args:
-            smiles: SMILES文字列
-            output_path: 出力ファイルパス
-            compound_name: 化合物名
+            smiles: SMILES string
+            output_path: Output file path
+            compound_name: Compound name (optional)
         """
-        pred_spectrum = self.predict_from_smiles(smiles)
-        peaks = self.find_significant_peaks(pred_spectrum)
-        
+        spectrum, _ = self.predict_from_smiles(smiles)
+        peaks = self.find_top_peaks(spectrum)
+
         mol = Chem.MolFromSmiles(smiles)
         if compound_name is None:
-            compound_name = f"Unknown_{Chem.MolToInchiKey(mol)}"
-        
+            compound_name = f"Predicted_{Chem.MolToInchiKey(mol)}"
+
         with open(output_path, 'w') as f:
-            f.write(f"NAME: {compound_name}\n")
+            f.write(f"Name: {compound_name}\n")
             f.write(f"SMILES: {smiles}\n")
-            f.write(f"INCHIKEY: {Chem.MolToInchiKey(mol)}\n")
-            f.write(f"NUM PEAKS: {len(peaks)}\n")
-            
+            f.write(f"InChIKey: {Chem.MolToInchiKey(mol)}\n")
+            f.write(f"Num Peaks: {len(peaks)}\n")
+
             for mz, intensity in peaks:
-                f.write(f"{mz} {intensity:.6f}\n")
-        
-        logger.info(f"Exported spectrum to {output_path}")
+                f.write(f"{mz} {intensity:.6f}; ")
+            f.write("\n")
+
+        logger.info(f"Exported to {output_path}")
+
 
 def main():
-    """メイン関数"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Predict Mass Spectrum from Molecular Structure')
-    parser.add_argument('--checkpoint', type=str, required=True,
-                       help='Path to model checkpoint')
-    parser.add_argument('--config', type=str, default='config.yaml',
-                       help='Path to config file')
-    parser.add_argument('--smiles', type=str,
-                       help='SMILES string')
-    parser.add_argument('--mol_file', type=str,
-                       help='Path to MOL file')
-    parser.add_argument('--batch_file', type=str,
-                       help='Path to file containing SMILES list (one per line)')
-    parser.add_argument('--output', type=str, default='prediction.png',
-                       help='Output path for visualization')
-    parser.add_argument('--export_msp', action='store_true',
-                       help='Export prediction to MSP format')
-    
+    parser = argparse.ArgumentParser(
+        description='NEIMS v2.0 Mass Spectrum Prediction'
+    )
+    parser.add_argument('--config', type=str, required=True, help='Config file')
+    parser.add_argument('--checkpoint', type=str, required=True, help='Model checkpoint')
+    parser.add_argument('--model', type=str, default='student', choices=['student', 'teacher'],
+                        help='Model type (default: student)')
+    parser.add_argument('--smiles', type=str, help='SMILES string')
+    parser.add_argument('--batch', type=str, help='File with SMILES list (one per line)')
+    parser.add_argument('--output', type=str, default='prediction.msp', help='Output file')
+    parser.add_argument('--device', type=str, default='cuda', help='Device (cuda/cpu)')
+    parser.add_argument('--uncertainty', action='store_true',
+                        help='Return uncertainty (Teacher only)')
+
     args = parser.parse_args()
-    
-    # 予測器の作成
-    predictor = MassSpectrumPredictor(args.checkpoint, args.config)
-    
+
+    # Create predictor
+    predictor = SpectrumPredictor(
+        config_path=args.config,
+        checkpoint_path=args.checkpoint,
+        model_type=args.model,
+        device=args.device
+    )
+
     if args.smiles:
-        # 単一SMILES予測
+        # Single prediction
         logger.info(f"Predicting spectrum for: {args.smiles}")
-        spectrum = predictor.predict_from_smiles(args.smiles)
-        
-        # ピークの表示
-        peaks = predictor.find_significant_peaks(spectrum)
-        logger.info(f"Top peaks: {peaks[:10]}")
-        
-        # 可視化
-        predictor.visualize_prediction(args.smiles, save_path=args.output)
-        
-        # MSPエクスポート
-        if args.export_msp:
-            msp_path = Path(args.output).with_suffix('.msp')
-            predictor.export_to_msp(args.smiles, str(msp_path))
-    
-    elif args.mol_file:
-        # MOLファイル予測
-        logger.info(f"Predicting spectrum from MOL file: {args.mol_file}")
-        spectrum = predictor.predict_from_mol_file(args.mol_file)
-        peaks = predictor.find_significant_peaks(spectrum)
-        logger.info(f"Top peaks: {peaks[:10]}")
-    
-    elif args.batch_file:
-        # バッチ予測
-        logger.info(f"Batch prediction from: {args.batch_file}")
-        with open(args.batch_file, 'r') as f:
+
+        spectrum, uncertainty = predictor.predict_from_smiles(
+            args.smiles,
+            return_uncertainty=args.uncertainty and args.model == 'teacher'
+        )
+
+        # Display top peaks
+        peaks = predictor.find_top_peaks(spectrum)
+        logger.info(f"\nTop 10 peaks:")
+        for i, (mz, intensity) in enumerate(peaks[:10], 1):
+            logger.info(f"  {i}. m/z {mz}: {intensity:.4f}")
+
+        # Display uncertainty if available
+        if uncertainty is not None:
+            mean_uncertainty = uncertainty.mean()
+            logger.info(f"\nMean uncertainty: {mean_uncertainty:.4f}")
+
+        # Export
+        predictor.export_msp(args.smiles, args.output)
+
+    elif args.batch:
+        # Batch prediction
+        logger.info(f"Batch prediction from: {args.batch}")
+
+        with open(args.batch, 'r') as f:
             smiles_list = [line.strip() for line in f if line.strip()]
-        
+
+        logger.info(f"Predicting {len(smiles_list)} spectra...")
         spectra = predictor.predict_batch(smiles_list)
-        logger.info(f"Predicted {len(spectra)} spectra")
-        
-        # 結果の保存
-        output_dir = Path(args.output).parent / "batch_results"
-        output_dir.mkdir(exist_ok=True)
-        
+
+        # Save results
+        output_dir = Path(args.output).parent / 'batch_predictions'
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         for i, (smiles, spectrum) in enumerate(zip(smiles_list, spectra)):
-            save_path = output_dir / f"prediction_{i+1}.png"
-            predictor.visualize_prediction(smiles, save_path=str(save_path))
-            
-            if args.export_msp:
-                msp_path = output_dir / f"prediction_{i+1}.msp"
-                predictor.export_to_msp(smiles, str(msp_path))
-    
+            output_file = output_dir / f'prediction_{i + 1}.msp'
+            try:
+                predictor.export_msp(smiles, str(output_file))
+            except Exception as e:
+                logger.warning(f"Failed to export {smiles}: {e}")
+
+        logger.info(f"Saved {len(smiles_list)} predictions to {output_dir}")
+
     else:
         parser.print_help()
+
 
 if __name__ == '__main__':
     main()

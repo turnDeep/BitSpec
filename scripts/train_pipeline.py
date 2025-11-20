@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
 # scripts/train_pipeline.py
 """
-BitSpec統合トレーニングパイプライン
+NEIMS v2.0 Complete Training Pipeline
 
-PCQM4Mv2データセットのダウンロード → 事前学習 → ファインチューニング → 予測
-を一つのスクリプトで実行します。
+Orchestrates 3-phase training workflow:
+  Phase 1: Teacher pretraining on PCQM4Mv2 (Bond Masking)
+  Phase 2: Teacher finetuning on NIST EI-MS (MC Dropout)
+  Phase 3: Student distillation (Knowledge Distillation)
+
+Usage:
+  # Full pipeline
+  python scripts/train_pipeline.py --config config.yaml
+
+  # Resume from phase 2
+  python scripts/train_pipeline.py --config config.yaml --start-phase 2
+
+  # Skip pretraining (use existing checkpoint)
+  python scripts/train_pipeline.py --config config.yaml --skip-pretrain
 """
 
-import torch
-import yaml
-from pathlib import Path
-import logging
 import argparse
-import sys
+import yaml
+import logging
 import subprocess
+import sys
+from pathlib import Path
 from datetime import datetime
 
-sys.path.append(str(Path(__file__).parent.parent))
-
-from src.data.pcqm4mv2_loader import PCQM4Mv2DataLoader
-from src.utils.rtx50_compat import setup_rtx50_compatibility
-
-# ロギング設定
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -29,274 +34,302 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class BitSpecPipeline:
-    """BitSpec統合トレーニングパイプライン"""
+class NEIMSPipeline:
+    """NEIMS v2.0 3-Phase Training Pipeline"""
 
-    def __init__(self, config_path: str, skip_download: bool = False,
-                 skip_pretrain: bool = False, skip_finetune: bool = False,
-                 pretrain_subset: int = None):
+    def __init__(
+        self,
+        config_path: str,
+        config_pretrain_path: str = None,
+        start_phase: int = 1,
+        skip_pretrain: bool = False,
+        device: str = 'cuda'
+    ):
         """
         Args:
-            config_path: 設定ファイルのパス
-            skip_download: PCQM4Mv2ダウンロードをスキップ
-            skip_pretrain: 事前学習をスキップ
-            skip_finetune: ファインチューニングをスキップ
-            pretrain_subset: 事前学習で使用するサンプル数（デバッグ用）
+            config_path: Main config file (config.yaml)
+            config_pretrain_path: Pretraining config file (config_pretrain.yaml)
+            start_phase: Starting phase (1, 2, or 3)
+            skip_pretrain: Skip phase 1 (use existing checkpoint)
+            device: Device to use (cuda/cpu)
         """
         self.config_path = Path(config_path)
-        self.skip_download = skip_download
+        self.config_pretrain_path = Path(config_pretrain_path or 'config_pretrain.yaml')
+        self.start_phase = start_phase
         self.skip_pretrain = skip_pretrain
-        self.skip_finetune = skip_finetune
-        self.pretrain_subset = pretrain_subset
+        self.device = device
 
-        # 設定の読み込み
-        with open(self.config_path, 'r') as f:
+        # Load configs
+        with open(self.config_path) as f:
             self.config = yaml.safe_load(f)
 
-        # デバイス設定
-        self.device = setup_rtx50_compatibility()
-        logger.info(f"Using device: {self.device}")
+        if self.config_pretrain_path.exists():
+            with open(self.config_pretrain_path) as f:
+                self.config_pretrain = yaml.safe_load(f)
+        else:
+            self.config_pretrain = self.config
 
-        # パスの設定
-        self.data_dir = Path(self.config['pretraining']['data_path'])
-        self.pretrain_checkpoint_dir = Path(self.config['pretraining']['checkpoint_dir'])
-        self.finetune_checkpoint_dir = Path(self.config['finetuning']['checkpoint_dir'])
+        # Checkpoint paths
+        self.teacher_pretrain_checkpoint = Path(
+            self.config_pretrain.get('training', {})
+            .get('teacher_pretrain', {})
+            .get('checkpoint_dir', 'checkpoints/teacher')
+        ) / 'best_pretrain_teacher.pt'
 
-        # ディレクトリの作成
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.pretrain_checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.finetune_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.teacher_finetune_checkpoint = Path(
+            self.config['training']['teacher_finetune']['checkpoint_dir']
+        ) / 'best_finetune_teacher.pt'
 
-    def step1_download_pcqm4mv2(self):
-        """ステップ1: PCQM4Mv2データセットのダウンロード"""
-        if self.skip_download:
-            logger.info("⏭️  Skipping PCQM4Mv2 download (--skip-download)")
+        self.student_checkpoint = Path(
+            self.config['training']['student_distill']['checkpoint_dir']
+        ) / 'best_student.pt'
+
+    def phase1_teacher_pretrain(self):
+        """Phase 1: Teacher Pretraining on PCQM4Mv2"""
+        if self.skip_pretrain or self.start_phase > 1:
+            logger.info("⏭️  Skipping Phase 1: Teacher Pretraining")
+            if self.teacher_pretrain_checkpoint.exists():
+                logger.info(f"Using existing checkpoint: {self.teacher_pretrain_checkpoint}")
             return
 
         logger.info("=" * 80)
-        logger.info("ステップ1: PCQM4Mv2データセットのダウンロード")
+        logger.info("Phase 1: Teacher Pretraining on PCQM4Mv2")
         logger.info("=" * 80)
 
         try:
-            # OGBを使用してPCQM4Mv2をダウンロード
-            logger.info("Downloading PCQM4Mv2 dataset via OGB...")
-            logger.info("This may take a while (dataset size: ~3.8 million molecules)")
-
-            # データローダーを使用してダウンロードを実行
-            # キャッシュを無効化して高速化（存在確認のみ）
-            _, _, _ = PCQM4Mv2DataLoader.create_dataloaders(
-                root=str(self.data_dir),
-                batch_size=1,  # ダウンロードのみなので小さいバッチサイズ
-                num_workers=0,
-                node_feature_dim=self.config['model']['node_features'],
-                edge_feature_dim=self.config['model']['edge_features'],
-                use_subset=100,  # 最初の100サンプルだけロードして存在確認
-                use_cache=False  # ダウンロード確認時はキャッシュ不要
-            )
-
-            logger.info("✓ PCQM4Mv2 dataset downloaded successfully!")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to download PCQM4Mv2: {e}")
-            raise
-
-    def step2_pretrain(self):
-        """ステップ2: PCQM4Mv2での事前学習"""
-        if self.skip_pretrain:
-            logger.info("⏭️  Skipping pretraining (--skip-pretrain)")
-            return
-
-        logger.info("=" * 80)
-        logger.info("ステップ2: PCQM4Mv2事前学習")
-        logger.info("=" * 80)
-
-        try:
-            # 事前学習用の一時設定ファイルを作成（サブセット指定がある場合）
-            config_to_use = self.config_path
-            if self.pretrain_subset is not None:
-                logger.info(f"Using subset of {self.pretrain_subset} samples for pretraining")
-                temp_config = self.config.copy()
-                temp_config['pretraining']['use_subset'] = self.pretrain_subset
-                temp_config_path = self.config_path.parent / f"temp_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.yaml"
-                with open(temp_config_path, 'w') as f:
-                    yaml.dump(temp_config, f)
-                config_to_use = temp_config_path
-
-            # pretrain.pyを実行
-            pretrain_script = Path(__file__).parent / "pretrain.py"
-            cmd = [sys.executable, str(pretrain_script), "--config", str(config_to_use)]
+            script = Path(__file__).parent / 'train_teacher.py'
+            cmd = [
+                sys.executable,
+                str(script),
+                '--config', str(self.config_pretrain_path),
+                '--phase', 'pretrain',
+                '--device', self.device
+            ]
 
             logger.info(f"Running: {' '.join(cmd)}")
             result = subprocess.run(cmd, check=True)
 
             if result.returncode == 0:
-                logger.info("✓ Pretraining completed successfully!")
+                logger.info("✅ Phase 1 completed: Teacher pretrained")
             else:
-                raise RuntimeError(f"Pretraining failed with return code {result.returncode}")
-
-            # 一時ファイルの削除
-            if self.pretrain_subset is not None and temp_config_path.exists():
-                temp_config_path.unlink()
+                raise RuntimeError(f"Phase 1 failed with return code {result.returncode}")
 
         except Exception as e:
-            logger.error(f"❌ Pretraining failed: {e}")
+            logger.error(f"❌ Phase 1 failed: {e}")
             raise
 
-    def step3_finetune(self):
-        """ステップ3: EI-MSタスクでのファインチューニング"""
-        if self.skip_finetune:
-            logger.info("⏭️  Skipping finetuning (--skip-finetune)")
+    def phase2_teacher_finetune(self):
+        """Phase 2: Teacher Finetuning on NIST EI-MS"""
+        if self.start_phase > 2:
+            logger.info("⏭️  Skipping Phase 2: Teacher Finetuning")
+            if self.teacher_finetune_checkpoint.exists():
+                logger.info(f"Using existing checkpoint: {self.teacher_finetune_checkpoint}")
             return
 
         logger.info("=" * 80)
-        logger.info("ステップ3: EI-MSタスクでのファインチューニング")
+        logger.info("Phase 2: Teacher Finetuning on NIST EI-MS")
         logger.info("=" * 80)
 
         try:
-            # 事前学習済みモデルの存在確認
-            pretrained_backbone = self.pretrain_checkpoint_dir / "pretrained_backbone.pt"
-            if not pretrained_backbone.exists() and not self.skip_pretrain:
-                logger.warning(f"⚠️  Pretrained backbone not found at {pretrained_backbone}")
-                logger.warning("Training from scratch instead...")
+            script = Path(__file__).parent / 'train_teacher.py'
+            cmd = [
+                sys.executable,
+                str(script),
+                '--config', str(self.config_path),
+                '--phase', 'finetune',
+                '--device', self.device
+            ]
 
-            # finetune.pyを実行
-            finetune_script = Path(__file__).parent / "finetune.py"
-            cmd = [sys.executable, str(finetune_script), "--config", str(self.config_path)]
+            # Add pretrained checkpoint if available
+            if self.teacher_pretrain_checkpoint.exists():
+                cmd.extend(['--pretrained', str(self.teacher_pretrain_checkpoint)])
+                logger.info(f"Using pretrained checkpoint: {self.teacher_pretrain_checkpoint}")
+            else:
+                logger.warning("⚠️  No pretrained checkpoint found. Training from scratch.")
 
             logger.info(f"Running: {' '.join(cmd)}")
             result = subprocess.run(cmd, check=True)
 
             if result.returncode == 0:
-                logger.info("✓ Finetuning completed successfully!")
+                logger.info("✅ Phase 2 completed: Teacher finetuned")
             else:
-                raise RuntimeError(f"Finetuning failed with return code {result.returncode}")
+                raise RuntimeError(f"Phase 2 failed with return code {result.returncode}")
 
         except Exception as e:
-            logger.error(f"❌ Finetuning failed: {e}")
+            logger.error(f"❌ Phase 2 failed: {e}")
             raise
 
-    def step4_summary(self):
-        """ステップ4: サマリー表示"""
+    def phase3_student_distill(self):
+        """Phase 3: Student Knowledge Distillation"""
+        if self.start_phase > 3:
+            logger.info("⏭️  Skipping Phase 3: Student Distillation")
+            return
+
         logger.info("=" * 80)
-        logger.info("🎉 パイプライン完了!")
+        logger.info("Phase 3: Student Knowledge Distillation")
         logger.info("=" * 80)
 
-        # 保存されたモデルの確認
-        pretrained_backbone = self.pretrain_checkpoint_dir / "pretrained_backbone.pt"
-        pretrained_best = self.pretrain_checkpoint_dir / "best_pretrained_model.pt"
-        finetuned_best = self.finetune_checkpoint_dir / "best_finetuned_model.pt"
+        try:
+            # Check teacher checkpoint
+            if not self.teacher_finetune_checkpoint.exists():
+                raise FileNotFoundError(
+                    f"Teacher checkpoint not found: {self.teacher_finetune_checkpoint}\n"
+                    "Please complete Phase 2 first."
+                )
 
-        logger.info("\n📁 生成されたファイル:")
-        if pretrained_backbone.exists():
-            logger.info(f"  ✓ 事前学習済みバックボーン: {pretrained_backbone}")
-        if pretrained_best.exists():
-            logger.info(f"  ✓ 事前学習ベストモデル: {pretrained_best}")
-        if finetuned_best.exists():
-            logger.info(f"  ✓ ファインチューニング済みモデル: {finetuned_best}")
+            script = Path(__file__).parent / 'train_student.py'
+            cmd = [
+                sys.executable,
+                str(script),
+                '--config', str(self.config_path),
+                '--teacher', str(self.teacher_finetune_checkpoint),
+                '--device', self.device
+            ]
 
-        logger.info("\n🚀 次のステップ:")
-        logger.info("  予測を実行する:")
-        logger.info(f"    python scripts/predict.py --checkpoint {finetuned_best} --config {self.config_path} --smiles 'CC(=O)OC1=CC=CC=C1C(=O)O'")
+            logger.info(f"Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True)
+
+            if result.returncode == 0:
+                logger.info("✅ Phase 3 completed: Student distilled")
+            else:
+                raise RuntimeError(f"Phase 3 failed with return code {result.returncode}")
+
+        except Exception as e:
+            logger.error(f"❌ Phase 3 failed: {e}")
+            raise
+
+    def summary(self):
+        """Display pipeline summary"""
+        logger.info("=" * 80)
+        logger.info("🎉 NEIMS v2.0 Training Pipeline Completed!")
+        logger.info("=" * 80)
+
+        logger.info("\n📁 Generated Checkpoints:")
+
+        if self.teacher_pretrain_checkpoint.exists():
+            logger.info(f"  ✅ Teacher (Pretrained): {self.teacher_pretrain_checkpoint}")
+        else:
+            logger.info(f"  ❌ Teacher (Pretrained): Not found")
+
+        if self.teacher_finetune_checkpoint.exists():
+            logger.info(f"  ✅ Teacher (Finetuned):  {self.teacher_finetune_checkpoint}")
+        else:
+            logger.info(f"  ❌ Teacher (Finetuned):  Not found")
+
+        if self.student_checkpoint.exists():
+            logger.info(f"  ✅ Student (Distilled):  {self.student_checkpoint}")
+        else:
+            logger.info(f"  ❌ Student (Distilled):  Not found")
+
+        logger.info("\n🚀 Next Steps:")
+        logger.info("  1. Evaluate Student model:")
+        logger.info(f"     python scripts/evaluate.py --config {self.config_path} \\")
+        logger.info(f"         --checkpoint {self.student_checkpoint} --device {self.device}")
+        logger.info("\n  2. Run predictions:")
+        logger.info(f"     python scripts/predict.py --config {self.config_path} \\")
+        logger.info(f"         --checkpoint {self.student_checkpoint} --smiles 'CC(C)O'")
 
     def run(self):
-        """パイプライン全体を実行"""
+        """Run complete pipeline"""
         start_time = datetime.now()
+
         logger.info("=" * 80)
-        logger.info("BitSpec統合トレーニングパイプライン開始")
+        logger.info("NEIMS v2.0 Training Pipeline")
         logger.info("=" * 80)
-        logger.info(f"設定ファイル: {self.config_path}")
-        logger.info(f"デバイス: {self.device}")
-        logger.info(f"開始時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Config: {self.config_path}")
+        logger.info(f"Pretrain Config: {self.config_pretrain_path}")
+        logger.info(f"Device: {self.device}")
+        logger.info(f"Start Phase: {self.start_phase}")
+        logger.info(f"Start Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("")
 
         try:
-            # ステップ1: データセットのダウンロード
-            self.step1_download_pcqm4mv2()
+            # Phase 1: Teacher Pretraining
+            if self.start_phase <= 1:
+                self.phase1_teacher_pretrain()
 
-            # ステップ2: 事前学習
-            self.step2_pretrain()
+            # Phase 2: Teacher Finetuning
+            if self.start_phase <= 2:
+                self.phase2_teacher_finetune()
 
-            # ステップ3: ファインチューニング
-            self.step3_finetune()
+            # Phase 3: Student Distillation
+            if self.start_phase <= 3:
+                self.phase3_student_distill()
 
-            # ステップ4: サマリー
-            self.step4_summary()
+            # Summary
+            self.summary()
 
-            # 実行時間の計算
+            # Elapsed time
             end_time = datetime.now()
-            elapsed_time = end_time - start_time
-            logger.info(f"\n⏱️  総実行時間: {elapsed_time}")
+            elapsed = end_time - start_time
+            logger.info(f"\n⏱️  Total Time: {elapsed}")
 
         except Exception as e:
-            logger.error(f"\n❌ パイプラインが失敗しました: {e}")
+            logger.error(f"\n❌ Pipeline failed: {e}")
             raise
 
 
 def main():
-    """メイン関数"""
     parser = argparse.ArgumentParser(
-        description='BitSpec統合トレーニングパイプライン',
+        description='NEIMS v2.0 Complete Training Pipeline',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-使用例:
-  # 完全なパイプラインを実行（ダウンロード→事前学習→ファインチューニング）
-  python scripts/train_pipeline.py --config config_pretrain.yaml
+Examples:
+  # Full 3-phase pipeline
+  python scripts/train_pipeline.py --config config.yaml
 
-  # ダウンロードをスキップ（既にダウンロード済みの場合）
-  python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download
+  # Resume from phase 2 (Teacher finetuning)
+  python scripts/train_pipeline.py --config config.yaml --start-phase 2
 
-  # 事前学習をスキップ（スクラッチから学習）
-  python scripts/train_pipeline.py --config config_pretrain.yaml --skip-pretrain
+  # Skip pretraining (use existing Teacher checkpoint)
+  python scripts/train_pipeline.py --config config.yaml --skip-pretrain
 
-  # デバッグ用（小さなサブセットで事前学習）
-  python scripts/train_pipeline.py --config config_pretrain.yaml --pretrain-subset 10000
-
-  # ファインチューニングのみ実行
-  python scripts/train_pipeline.py --config config_pretrain.yaml --skip-download --skip-pretrain
+  # Use custom pretraining config
+  python scripts/train_pipeline.py --config config.yaml \\
+      --config-pretrain config_pretrain.yaml
         """
     )
 
     parser.add_argument(
         '--config',
         type=str,
-        default='config_pretrain.yaml',
-        help='設定ファイルのパス（デフォルト: config_pretrain.yaml）'
+        required=True,
+        help='Main config file (config.yaml)'
     )
-
     parser.add_argument(
-        '--skip-download',
-        action='store_true',
-        help='PCQM4Mv2のダウンロードをスキップ'
+        '--config-pretrain',
+        type=str,
+        default=None,
+        help='Pretraining config file (default: config_pretrain.yaml)'
     )
-
+    parser.add_argument(
+        '--start-phase',
+        type=int,
+        default=1,
+        choices=[1, 2, 3],
+        help='Starting phase (1: pretrain, 2: finetune, 3: distill)'
+    )
     parser.add_argument(
         '--skip-pretrain',
         action='store_true',
-        help='事前学習をスキップ（スクラッチから学習）'
+        help='Skip phase 1 (use existing pretrained checkpoint)'
     )
-
     parser.add_argument(
-        '--skip-finetune',
-        action='store_true',
-        help='ファインチューニングをスキップ'
-    )
-
-    parser.add_argument(
-        '--pretrain-subset',
-        type=int,
-        default=None,
-        help='事前学習で使用するサンプル数（デバッグ用、例: 10000）'
+        '--device',
+        type=str,
+        default='cuda',
+        help='Device (cuda/cpu)'
     )
 
     args = parser.parse_args()
 
-    # パイプラインの作成と実行
-    pipeline = BitSpecPipeline(
+    # Create and run pipeline
+    pipeline = NEIMSPipeline(
         config_path=args.config,
-        skip_download=args.skip_download,
+        config_pretrain_path=args.config_pretrain,
+        start_phase=args.start_phase,
         skip_pretrain=args.skip_pretrain,
-        skip_finetune=args.skip_finetune,
-        pretrain_subset=args.pretrain_subset
+        device=args.device
     )
 
     pipeline.run()
