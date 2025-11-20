@@ -95,11 +95,13 @@ BitSpec/
 │   └── NEIMS_v2_SYSTEM_SPECIFICATION.md  # 完全システム仕様書
 ├── src/
 │   ├── data/                     # データ処理
-│   │   ├── mol_parser.py         # MOL/MSPパーサー
-│   │   ├── features.py           # 分子特徴量抽出（ECFP4, Count FP）
-│   │   ├── dataset.py            # データセット
-│   │   ├── augmentation.py       # データ拡張（LDS, Isotope）
-│   │   └── pcqm4mv2_loader.py    # PCQM4Mv2データローダー
+│   │   ├── nist_dataset.py       # NISTデータセット（Teacher/Studentモード対応）
+│   │   ├── pcqm4m_dataset.py     # PCQM4Mv2データセット（事前学習用）
+│   │   ├── preprocessing.py      # データ前処理ユーティリティ
+│   │   ├── augmentation.py       # データ拡張（LDS, Isotope, Conformer）
+│   │   ├── mol_parser.py         # MOL/MSPパーサー（レガシー）
+│   │   ├── features.py           # 分子特徴量抽出（レガシー）
+│   │   └── dataset.py            # データセット（レガシー）
 │   ├── models/                   # モデル定義
 │   │   ├── teacher.py            # Teacher（GNN+ECFP Hybrid）
 │   │   ├── student.py            # Student（MoE-Residual MLP）
@@ -201,62 +203,78 @@ python scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain
 
 ```bash
 python scripts/train_teacher.py --config config.yaml --phase finetune \
-    --pretrained-checkpoint checkpoints/teacher/pretrained_teacher.pt
+    --pretrained checkpoints/teacher/best_pretrain_teacher.pt
 ```
 
 事前学習済みTeacherをNIST EI-MSデータでファインチューニングし、MC Dropoutによる不確実性推定を有効化します。
+
+**重要**:
+- データセットローダー (`NISTDataset`) が自動的にNIST17.mspまたはmol_files/からデータをロード
+- 初回実行時は自動的に前処理とキャッシングを実行（`data/processed/`に保存）
+- Teacher/Studentモードに応じて異なる特徴量を生成
 
 #### Phase 3: Student知識蒸留
 
 ```bash
 python scripts/train_student.py --config config.yaml \
-    --teacher-checkpoint checkpoints/teacher/finetuned_teacher.pt
+    --teacher checkpoints/teacher/best_finetune_teacher.pt
 ```
 
 MoE-Residual StudentモデルがTeacherから知識を学習します（Uncertainty-Aware KD、GradNorm適応重み付け）。
 
+**データローダーの仕組み**:
+- Teacher用データローダー: グラフ + ECFP特徴量でソフトラベル生成（MC Dropout）
+- Student用データローダー: ECFP + Count FP特徴量でトレーニング
+- 同一データセットの異なる表現を同期的に処理
+
 ### 4. 推論
 
-#### 単一分子の予測 (SMILES)
+#### 単一分子の予測（Student：高速）
 
 ```bash
 python scripts/predict.py \
-    --checkpoint checkpoints/best_model.pt \
     --config config.yaml \
+    --checkpoint checkpoints/student/best_student.pt \
     --smiles "CC(=O)OC1=CC=CC=C1C(=O)O" \
-    --output prediction.png
+    --output aspirin_prediction.msp
 ```
 
-#### MOLファイルからの予測
+**出力例**:
+```
+2025-11-20 12:34:56 - INFO - Predicting spectrum for: CC(=O)OC1=CC=CC=C1C(=O)O
+
+Top 10 peaks:
+  1. m/z 180: 0.9876
+  2. m/z 138: 0.7654
+  3. m/z 120: 0.6543
+  ...
+```
+
+#### 不確実性付き予測（Teacher：高精度）
 
 ```bash
 python scripts/predict.py \
-    --checkpoint checkpoints/best_model.pt \
     --config config.yaml \
-    --mol_file data/mol_files/ID200001.MOL \
-    --output prediction.png
+    --checkpoint checkpoints/teacher/best_finetune_teacher.pt \
+    --model teacher \
+    --smiles "CC(=O)OC1=CC=CC=C1C(=O)O" \
+    --uncertainty
 ```
+
+MC Dropoutで不確実性推定を行います（推論時間: ~100ms）。
 
 #### バッチ予測
 
 ```bash
-# smiles.txtに各行1つのSMILES文字列を記載
+# smiles_list.txtに各行1つのSMILES文字列を記載
 python scripts/predict.py \
-    --checkpoint checkpoints/best_model.pt \
     --config config.yaml \
-    --batch_file smiles.txt \
-    --output batch_predictions/
+    --checkpoint checkpoints/student/best_student.pt \
+    --batch smiles_list.txt \
+    --output predictions/
 ```
 
-#### MSP形式でエクスポート
-
-```bash
-python scripts/predict.py \
-    --checkpoint checkpoints/best_model.pt \
-    --config config.yaml \
-    --smiles "CC(=O)OC1=CC=CC=C1C(=O)O" \
-    --export_msp
-```
+バッチ予測結果は `predictions/batch_predictions/` に保存されます。
 
 ## トレーニング戦略
 
@@ -311,6 +329,67 @@ NEIMS v2.0は、段階的な学習で最高性能を達成します:
 - **Isotope Substitution**: C12 → C13（5%の分子に適用）
 - **Conformer Generation**: Teacher事前学習のみ（3-5コンフォーマー）
 
+### データセットローダーの実装詳細
+
+#### NISTDataset（`src/data/nist_dataset.py`）
+
+NIST EI-MSデータセット用の統合ローダー。Teacher/Studentモードに応じて異なる特徴量を生成。
+
+**特徴**:
+- **MSPファイル解析**: NIST17.msp からスペクトルとメタデータを自動抽出
+- **MOLファイル対応**: `data/mol_files/` から分子構造を読み込み
+- **2つのモード**:
+  - **Teacherモード**: PyG グラフ（48次元ノード、6次元エッジ）+ ECFP4（4096-bit）
+  - **Studentモード**: ECFP4（4096-bit）+ Count FP（2048次元）
+- **自動キャッシング**: 前処理済みデータを `data/processed/` に保存
+- **Train/Val/Test分割**: 8:1:1 の自動分割（seed=42）
+- **データ拡張**: LDS smoothing（σ=1.5）をオプションで適用
+
+**使用例**:
+```python
+from src.data import NISTDataset, collate_fn_teacher
+
+dataset = NISTDataset(
+    data_config={'nist_msp_path': 'data/NIST17.msp',
+                 'mol_files_dir': 'data/mol_files',
+                 'max_mz': 500},
+    mode='teacher',    # または 'student'
+    split='train',     # または 'val', 'test'
+    augment=True       # LDS smoothing有効化
+)
+```
+
+#### PCQM4Mv2Dataset（`src/data/pcqm4m_dataset.py`）
+
+PCQM4Mv2（3.8M分子）を用いたTeacher事前学習用データセット。
+
+**特徴**:
+- **自動ダウンロード**: OGB経由で初回実行時にダウンロード（~20GB）
+- **ボンドマスキング**: Self-supervised学習タスク（15%のボンドをマスク）
+- **PyG グラフ生成**: マスクされたボンド特徴量を含むグラフ構築
+- **Train/Val分割**: 90:10 の自動分割
+- **高速キャッシング**: 前処理済みグラフをキャッシュ
+
+**ボンドマスキング**:
+```python
+mask_ratio = 0.15  # 15%のボンドをマスク
+masked_graph, mask_targets = mol_to_graph_with_mask(mol, mask_ratio)
+# Teacherは masked_graph からマスクされたボンドの特徴を予測
+```
+
+#### preprocessing.py（`src/data/preprocessing.py`）
+
+データ前処理ユーティリティ関数集。
+
+**主要関数**:
+- `validate_smiles()`: SMILES検証
+- `canonicalize_smiles()`: SMILES正規化
+- `filter_by_molecular_weight()`: 分子量フィルタ（50-1000 Da）
+- `normalize_spectrum()`: スペクトル正規化（max正規化またはL2正規化）
+- `remove_noise_peaks()`: ノイズピーク除去（閾値: 0.001）
+- `peaks_to_spectrum_array()`: ピークリスト → ビンドスペクトル変換
+- `compute_molecular_descriptors()`: 分子記述子計算（MW, LogP, TPSA, etc.）
+
 ### リスク緩和策
 
 | リスク | 確率 | 対策 |
@@ -324,35 +403,90 @@ NEIMS v2.0は、段階的な学習で最高性能を達成します:
 
 ## Pythonスクリプトでの使用
 
+### Student モデル（高速推論）
+
 ```python
-from src.models.gcn_model import GCNMassSpecPredictor
-from scripts.predict import MassSpectrumPredictor
+from scripts.predict import SpectrumPredictor
 
-# 予測器の初期化
-predictor = MassSpectrumPredictor(
-    checkpoint_path='checkpoints/best_model.pt',
-    config_path='config.yaml'
+# Studentモデルで高速予測
+predictor = SpectrumPredictor(
+    config_path='config.yaml',
+    checkpoint_path='checkpoints/student/best_student.pt',
+    model_type='student',  # 'student' または 'teacher'
+    device='cuda'
 )
 
-# SMILES文字列から予測
-spectrum = predictor.predict_from_smiles('CC(=O)OC1=CC=CC=C1C(=O)O')
+# SMILES文字列から予測（~10ms）
+spectrum, _ = predictor.predict_from_smiles('CC(=O)OC1=CC=CC=C1C(=O)O')
 
-# 有意なピークの検出
-peaks = predictor.find_significant_peaks(spectrum, threshold=0.05, top_n=20)
+# Top peaks検出
+peaks = predictor.find_top_peaks(spectrum, top_n=20, threshold=0.01)
 print(f"Top 10 peaks: {peaks[:10]}")
-
-# 可視化
-predictor.visualize_prediction(
-    smiles='CC(=O)OC1=CC=CC=C1C(=O)O',
-    save_path='aspirin_spectrum.png'
-)
+# 出力: [(180, 0.9876), (138, 0.7654), ...]
 
 # MSP形式でエクスポート
-predictor.export_to_msp(
+predictor.export_msp(
     smiles='CC(=O)OC1=CC=CC=C1C(=O)O',
     output_path='aspirin.msp',
     compound_name='Aspirin'
 )
+
+# バッチ予測
+smiles_list = ['CCO', 'CC(C)O', 'c1ccccc1']
+spectra = predictor.predict_batch(smiles_list, batch_size=32)
+print(f"Predicted {len(spectra)} spectra")
+```
+
+### Teacher モデル（不確実性推定付き）
+
+```python
+# Teacherモデルで不確実性推定
+teacher_predictor = SpectrumPredictor(
+    config_path='config.yaml',
+    checkpoint_path='checkpoints/teacher/best_finetune_teacher.pt',
+    model_type='teacher',
+    device='cuda'
+)
+
+# MC Dropoutで不確実性推定（~100ms）
+spectrum, uncertainty = teacher_predictor.predict_from_smiles(
+    'CC(=O)OC1=CC=CC=C1C(=O)O',
+    return_uncertainty=True
+)
+
+print(f"Mean uncertainty: {uncertainty.mean():.4f}")
+```
+
+### データセットの直接使用
+
+```python
+from src.data import NISTDataset, collate_fn_student
+from torch.utils.data import DataLoader
+
+# NIST EI-MSデータセット（Studentモード）
+dataset = NISTDataset(
+    data_config={'nist_msp_path': 'data/NIST17.msp',
+                 'mol_files_dir': 'data/mol_files',
+                 'max_mz': 500},
+    mode='student',  # 'teacher' または 'student'
+    split='train',   # 'train', 'val', 'test'
+    augment=True
+)
+
+# DataLoader作成
+loader = DataLoader(
+    dataset,
+    batch_size=32,
+    shuffle=True,
+    num_workers=8,
+    collate_fn=collate_fn_student
+)
+
+# イテレーション
+for batch in loader:
+    # batch['input']: ECFP + Count FP [batch, 6144]
+    # batch['spectrum']: Target spectrum [batch, 501]
+    ...
 ```
 
 ## モデルアーキテクチャ
@@ -635,6 +769,21 @@ MIT License
 
 ## 更新履歴
 
+- **v2.0.1** (2025-11-20): 完全データセット統合とトレーニングパイプライン実装
+  - **データセットローダー完全実装**:
+    - `NISTDataset`: NIST EI-MS データローダー（Teacher/Studentモード対応）
+    - `PCQM4Mv2Dataset`: PCQM4Mv2 事前学習データセット（ボンドマスキング）
+    - `preprocessing.py`: データ前処理ユーティリティ（正規化、フィルタリング、統計計算）
+  - **トレーニングスクリプト統合**:
+    - `train_teacher.py`: Phase 1-2完全統合（PCQM4Mv2 → NIST EI-MS）
+    - `train_student.py`: Phase 3知識蒸留完全統合（デュアルデータローダー）
+    - `train_pipeline.py`: 3フェーズ統合パイプライン（自動チェックポイント管理）
+  - **推論スクリプト更新**:
+    - `predict.py`: Student/Teacher両対応、不確実性推定サポート
+  - **完全動作可能**: エンドツーエンドトレーニング・推論パイプライン完成
+  - MSPファイル解析、PyG グラフ構築、ECFP/Count FP 生成完全実装
+  - データキャッシング、ハードウェア最適化（8 workers, prefetch_factor=4）
+
 - **v2.0.0** (2025-11-20): NEIMS v2.0 完全リアーキテクチャ
   - **Teacher-Student Knowledge Distillation**: GNN+ECFP Teacher → MoE-Residual Student
   - **Mixture of Experts (MoE)**: 4エキスパート（芳香族、脂肪族、複素環、一般）
@@ -644,6 +793,7 @@ MIT License
   - **ハードウェア最適化**: RTX 5070 Ti (16GB) + Ryzen 7700 + 32GB RAM
   - **目標性能**: Recall@10 ≥ 95.5%、推論時間 ≤ 10ms
   - 完全システム仕様書追加（`docs/NEIMS_v2_SYSTEM_SPECIFICATION.md`）
+  - モデルアーキテクチャ、損失関数、トレーナー実装完了
 
 - **v1.3.0** (2025-11): 統合パイプライン追加
   - `train_pipeline.py`: PCQM4Mv2ダウンロード→事前学習→ファインチューニング
