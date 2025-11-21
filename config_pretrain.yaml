@@ -33,39 +33,41 @@ data:
 
 # Teacher Model設定（GNN + ECFP Hybrid）
 model:
-  type: "GNN_ECFP_Hybrid"
+  # Teacher Model
+  teacher:
+    type: "GNN_ECFP_Hybrid"
 
-  # GNN Branch
-  gnn:
-    conv_type: "GINEConv"       # Edge features対応
-    num_layers: 8               # Deep GNN
-    hidden_dim: 256
-    edge_dim: 128
-    dropout: 0.3                # MC Dropout用
-    drop_edge: 0.2              # Over-smoothing防止
-    use_pair_norm: true         # PairNorm正規化
-    use_bond_breaking: true     # Bond-Breaking Attention
+    # GNN Branch
+    gnn:
+      conv_type: "GINEConv"       # Edge features対応
+      num_layers: 8               # Deep GNN
+      hidden_dim: 256
+      edge_dim: 128
+      dropout: 0.3                # MC Dropout用
+      drop_edge: 0.2              # Over-smoothing防止
+      use_pair_norm: true         # PairNorm正規化
+      use_bond_breaking: true     # Bond-Breaking Attention
 
-  # ECFP Branch
-  ecfp:
-    fingerprint_size: 4096      # ECFP4
-    mlp_hidden: 1024
-    mlp_output: 512
-    dropout: 0.3
+    # ECFP Branch
+    ecfp:
+      fingerprint_size: 4096      # ECFP4
+      mlp_hidden: 1024
+      mlp_output: 512
+      dropout: 0.3
 
-  # Fusion
-  fusion_dim: 1280              # GNN(768) + ECFP(512)
+    # Fusion
+    fusion_dim: 1280              # GNN(768) + ECFP(512)
 
-  # Prediction Head
-  prediction:
-    hidden_dims: [1024, 512]
-    output_dim: 501             # m/z 0-500
-    use_bidirectional: true     # NEIMS-style
+    # Prediction Head
+    prediction:
+      hidden_dims: [1024, 512]
+      output_dim: 501             # m/z 0-500
+      use_bidirectional: true     # NEIMS-style
 
-  # MC Dropout（ファインチューニング時）
-  mc_dropout:
-    n_samples: 30
-    dropout_rate: 0.3
+    # MC Dropout（ファインチューニング時）
+    mc_dropout:
+      n_samples: 30
+      dropout_rate: 0.3
 
   # 共通設定
   common:
