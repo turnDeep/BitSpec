@@ -53,6 +53,8 @@ class NEIMSPipeline:
             skip_pretrain: Skip phase 1 (use existing checkpoint)
             device: Device to use (cuda/cpu)
         """
+        self.check_environment(device)
+
         self.config_path = Path(config_path)
         self.config_pretrain_path = Path(config_pretrain_path or 'config_pretrain.yaml')
         self.start_phase = start_phase
@@ -83,6 +85,42 @@ class NEIMSPipeline:
         self.student_checkpoint = Path(
             self.config['training']['student_distill']['checkpoint_dir']
         ) / 'best_student.pt'
+
+    def check_environment(self, device: str):
+        """Check if environment is compatible with requested device"""
+        if device == 'cpu':
+            return
+
+        logger.info("Checking environment compatibility...")
+        try:
+            import torch
+            import torch_scatter
+        except ImportError as e:
+            logger.error(f"Missing dependency: {e}")
+            # We can't really proceed if basic deps are missing, but we let the pipeline fail naturally or setup script handle it
+            return
+
+        if not torch.cuda.is_available():
+            logger.warning("⚠️  CUDA requested but not available in PyTorch. Training will fail if CUDA is forced.")
+            return
+
+        # Check torch-scatter CUDA support
+        try:
+            # Simple CUDA test for torch-scatter
+            x = torch.randn(5, 5).cuda()
+            index = torch.tensor([0, 0, 1, 1, 2]).cuda()
+            _ = torch_scatter.scatter_max(x, index, dim=0)
+            logger.info("✅ Environment check passed: CUDA and torch-scatter are working.")
+        except RuntimeError as e:
+            if "Not compiled with CUDA support" in str(e):
+                logger.error("❌ torch-scatter is not compiled with CUDA support!")
+                logger.error("This usually happens when torch-scatter is installed for CPU but CUDA is requested.")
+                logger.error("To fix this, please run the included fix script:")
+                logger.error("  ./fix_torch_scatter.sh")
+                logger.error("Then restart the training pipeline.")
+                sys.exit(1)
+            else:
+                logger.warning(f"⚠️  Environment check warning: {e}")
 
     def phase1_teacher_pretrain(self):
         """Phase 1: Teacher Pretraining on PCQM4Mv2"""
