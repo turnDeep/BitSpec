@@ -17,13 +17,6 @@ from rdkit.Chem import AllChem
 import numpy as np
 from typing import Tuple, Optional
 
-# Try to import torch_scatter-based pooling, fallback to native PyTorch
-try:
-    from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
-    _USE_TORCH_SCATTER = True
-except Exception:
-    _USE_TORCH_SCATTER = False
-
 # Native PyTorch pooling fallback implementations
 def _native_global_add_pool(x, batch, size=None):
     """Native PyTorch implementation of global_add_pool"""
@@ -54,11 +47,52 @@ def _native_global_max_pool(x, batch, size=None):
             out[i] = x[mask].max(dim=0)[0]
     return out
 
-# Use native implementations if torch_scatter is not available
-if not _USE_TORCH_SCATTER:
-    global_add_pool = _native_global_add_pool
-    global_mean_pool = _native_global_mean_pool
-    global_max_pool = _native_global_max_pool
+# Try to import torch_scatter-based pooling, with runtime fallback
+_torch_scatter_available = False
+try:
+    from torch_geometric.nn import global_add_pool as _pyg_add_pool
+    from torch_geometric.nn import global_mean_pool as _pyg_mean_pool
+    from torch_geometric.nn import global_max_pool as _pyg_max_pool
+    _torch_scatter_available = True
+except Exception:
+    pass
+
+# Wrapper functions with runtime fallback
+def global_add_pool(x, batch, size=None):
+    """Global add pooling with automatic fallback to native implementation"""
+    if _torch_scatter_available:
+        try:
+            return _pyg_add_pool(x, batch, size)
+        except (RuntimeError, Exception) as e:
+            if "CUDA" in str(e) or "compiled" in str(e):
+                # Fallback to native implementation on CUDA errors
+                return _native_global_add_pool(x, batch, size)
+            raise
+    return _native_global_add_pool(x, batch, size)
+
+def global_mean_pool(x, batch, size=None):
+    """Global mean pooling with automatic fallback to native implementation"""
+    if _torch_scatter_available:
+        try:
+            return _pyg_mean_pool(x, batch, size)
+        except (RuntimeError, Exception) as e:
+            if "CUDA" in str(e) or "compiled" in str(e):
+                # Fallback to native implementation on CUDA errors
+                return _native_global_mean_pool(x, batch, size)
+            raise
+    return _native_global_mean_pool(x, batch, size)
+
+def global_max_pool(x, batch, size=None):
+    """Global max pooling with automatic fallback to native implementation"""
+    if _torch_scatter_available:
+        try:
+            return _pyg_max_pool(x, batch, size)
+        except (RuntimeError, Exception) as e:
+            if "CUDA" in str(e) or "compiled" in str(e):
+                # Fallback to native implementation on CUDA errors
+                return _native_global_max_pool(x, batch, size)
+            raise
+    return _native_global_max_pool(x, batch, size)
 
 # Import BidirectionalModule
 try:
