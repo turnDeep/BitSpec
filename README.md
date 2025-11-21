@@ -1,6 +1,7 @@
-# BitSpec - NEIMS v2.0: Neural EI-MS Prediction with Knowledge Distillation
+# NExtIMS - NEIMS v2.0: Neural EI-MS Prediction with Knowledge Distillation
 
-次世代の電子衝撃イオン化マススペクトル（EI-MS）予測システム。Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテクチャを使用して、高精度かつ高速な質量スペクトル予測を実現します。
+次世代（Next）のNEIMSである電子衝撃イオン化マススペクトル（EI-MS）予測システム。
+Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテクチャを使用して、高精度かつ高速な質量スペクトル予測を実現します。
 
 ## 特徴
 
