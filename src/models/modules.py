@@ -10,6 +10,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Try to import torch_scatter-based pooling, fallback to native PyTorch
+try:
+    from torch_geometric.nn import global_add_pool
+    _USE_TORCH_SCATTER = True
+except Exception:
+    _USE_TORCH_SCATTER = False
+
+    # Native PyTorch implementation of global_add_pool
+    def global_add_pool(x, batch, size=None):
+        """Native PyTorch implementation of global_add_pool"""
+        if size is None:
+            size = int(batch.max().item()) + 1
+        out = torch.zeros(size, x.size(1), dtype=x.dtype, device=x.device)
+        out.index_add_(0, batch, x)
+        return out
+
 
 class BidirectionalModule(nn.Module):
     """
@@ -65,8 +81,6 @@ class AttentionPooling(nn.Module):
         Returns:
             pooled: Graph-level representation [batch_size, hidden_dim]
         """
-        from torch_geometric.nn import global_add_pool
-
         # Compute attention scores
         scores = self.attention(x)  # [N, 1]
 
