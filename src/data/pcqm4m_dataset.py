@@ -281,8 +281,9 @@ class PCQM4Mv2Dataset(Dataset):
             {
                 'graph': PyG Data with masked bonds
                 'ecfp': ECFP4 fingerprint
+                'spectrum': Dummy spectrum (zeros for pretraining)
                 'mask_indices': Indices of masked edges
-                'mask_targets': Target bond features
+                'bond_targets': Target bond features (for bond masking task)
             }
         """
         real_idx = self.split_indices[idx]
@@ -299,11 +300,15 @@ class PCQM4Mv2Dataset(Dataset):
         # Generate ECFP
         ecfp = mol_to_ecfp(mol)
 
+        # Dummy spectrum for pretraining (not used in loss, but needed for consistency)
+        dummy_spectrum = torch.zeros(501, dtype=torch.float32)
+
         return {
             'graph': graph,
             'ecfp': torch.tensor(ecfp, dtype=torch.float32),
+            'spectrum': dummy_spectrum,
             'mask_indices': graph.mask_indices,
-            'mask_targets': mask_targets,
+            'bond_targets': mask_targets,  # Renamed from 'mask_targets' for trainer compatibility
             'smiles': smiles
         }
 
@@ -314,6 +319,7 @@ def collate_fn_pretrain(batch: List[Dict]) -> Dict:
 
     graphs = [sample['graph'] for sample in batch]
     ecfps = torch.stack([sample['ecfp'] for sample in batch])
+    spectra = torch.stack([sample['spectrum'] for sample in batch])
 
     # Batch graphs
     graph_batch = Batch.from_data_list(graphs)
@@ -334,14 +340,15 @@ def collate_fn_pretrain(batch: List[Dict]) -> Dict:
 
     if mask_indices_list:
         mask_indices = torch.cat(mask_indices_list, dim=0)
-        mask_targets = torch.cat(mask_targets_list, dim=0)
+        bond_targets = torch.cat(mask_targets_list, dim=0)
     else:
         mask_indices = torch.zeros(0, dtype=torch.long)
-        mask_targets = torch.zeros((0, 4), dtype=torch.float)
+        bond_targets = torch.zeros((0, 4), dtype=torch.float)
 
     return {
         'graph': graph_batch,
         'ecfp': ecfps,
+        'spectrum': spectra,  # Dummy spectra for consistency
         'mask_indices': mask_indices,
-        'mask_targets': mask_targets
+        'bond_targets': bond_targets  # Renamed from 'mask_targets' for trainer compatibility
     }
