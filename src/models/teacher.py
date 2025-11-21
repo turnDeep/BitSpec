@@ -17,6 +17,13 @@ from rdkit.Chem import AllChem
 import numpy as np
 from typing import Tuple, Optional
 
+# Import BidirectionalModule
+try:
+    from src.models.modules import BidirectionalModule
+except ImportError:
+    # Fallback if running as script
+    from models.modules import BidirectionalModule
+
 
 class BondBreakingAttention(nn.Module):
     """
@@ -238,6 +245,7 @@ class TeacherModel(nn.Module):
         # Prediction Head
         hidden_dims = pred_cfg['hidden_dims']
         output_dim = pred_cfg['output_dim']
+        use_bidirectional = pred_cfg.get('use_bidirectional', False)
 
         layers = []
         input_dim = fusion_dim
@@ -248,7 +256,11 @@ class TeacherModel(nn.Module):
                 nn.Dropout(gnn_cfg['dropout'])
             ])
             input_dim = hidden_dim
-        layers.append(nn.Linear(input_dim, output_dim))
+
+        if use_bidirectional:
+            layers.append(BidirectionalModule(input_dim, output_dim))
+        else:
+            layers.append(nn.Linear(input_dim, output_dim))
 
         self.prediction_head = nn.Sequential(*layers)
 

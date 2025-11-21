@@ -13,6 +13,13 @@ import torch.nn.functional as F
 from typing import Tuple
 import numpy as np
 
+# Import BidirectionalModule
+try:
+    from src.models.modules import BidirectionalModule
+except ImportError:
+    # Fallback if running as script
+    from models.modules import BidirectionalModule
+
 
 class GateNetwork(nn.Module):
     """
@@ -185,6 +192,7 @@ class StudentModel(nn.Module):
         hidden_dims = pred_cfg['hidden_dims']
         output_dim = pred_cfg['output_dim']
         dropout = pred_cfg['dropout']
+        use_bidirectional = pred_cfg.get('use_bidirectional', False)
 
         layers = []
         prev_dim = self.input_dim
@@ -196,7 +204,11 @@ class StudentModel(nn.Module):
             ])
             prev_dim = hidden_dim
 
-        layers.append(nn.Linear(prev_dim, output_dim))
+        if use_bidirectional:
+            layers.append(BidirectionalModule(prev_dim, output_dim))
+        else:
+            layers.append(nn.Linear(prev_dim, output_dim))
+
         self.prediction_head = nn.Sequential(*layers)
 
     def forward(self, ecfp_count_fp):

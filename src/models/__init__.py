@@ -1,14 +1,16 @@
 # src/models/__init__.py
 """
-モデル定義モジュール
+Model Definition Module
 """
 
-from .gcn_model import GCNMassSpecPredictor
+# from .gcn_model import GCNMassSpecPredictor
 # from .graph_transformer import GraphTransformerPredictor
 # from .baseline import BaselinePredictor
+from .teacher import TeacherModel
+from .student import StudentModel
 
 __all__ = [
-    "GCNMassSpecPredictor",
-    # "GraphTransformerPredictor",
-    # "BaselinePredictor",
+    # "GCNMassSpecPredictor",
+    "TeacherModel",
+    "StudentModel"
 ]
