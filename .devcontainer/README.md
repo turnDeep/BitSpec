@@ -1,6 +1,6 @@
-# Dev Container での BitSpec 実行方法
+# Dev Container での NExtIMS 実行方法
 
-このディレクトリには、BitSpec (Mass Spectrum Prediction) プロジェクトをDev Containerで実行するための設定ファイルが含まれています。
+このディレクトリには、NExtIMS (Next Extended NEIMS) プロジェクトをDev Containerで実行するための設定ファイルが含まれています。
 
 ## 必要な環境
 

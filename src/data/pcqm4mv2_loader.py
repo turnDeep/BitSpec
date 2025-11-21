@@ -17,7 +17,7 @@ from tqdm import tqdm
 class PCQM4Mv2Wrapper(Dataset):
     """
     PCQM4Mv2データセットのラッパー
-    BitSpecのモデルに適合するようにデータを変換
+    NExtIMSのTeacherモデルに適合するようにデータを変換
 
     パフォーマンス最適化：
     - 初回読み込み時に特徴量を事前処理してキャッシュ
@@ -39,8 +39,8 @@ class PCQM4Mv2Wrapper(Dataset):
             root: データセットのルートディレクトリ
             split: 'train', 'val', 'test', 'holdout'のいずれか
             transform: データ変換関数
-            node_feature_dim: ノード特徴量の次元（BitSpecに合わせる）
-            edge_feature_dim: エッジ特徴量の次元（BitSpecに合わせる）
+            node_feature_dim: ノード特徴量の次元（NExtIMS Teacherに合わせる）
+            edge_feature_dim: エッジ特徴量の次元（NExtIMS Teacherに合わせる）
             use_cache: オンデマンドでキャッシュするか（メモリ効率的）
             preload_cache: 起動時に全データを事前キャッシュするか（時間がかかる）
         """
@@ -85,7 +85,7 @@ class PCQM4Mv2Wrapper(Dataset):
 
     def _adapt_features(self, data: Data) -> Data:
         """
-        PCQM4Mv2のデータをBitSpecのフォーマットに適応させる
+        PCQM4Mv2のデータをNExtIMSのフォーマットに適応させる
 
         Args:
             data: PCQM4Mv2のData object
@@ -95,7 +95,7 @@ class PCQM4Mv2Wrapper(Dataset):
         """
         # ノード特徴量の適応
         # PCQM4Mv2は9次元のノード特徴（原子番号など）
-        # BitSpecは48次元を期待しているので、パディングまたは埋め込みが必要
+        # NExtIMS Teacherは48次元を期待しているので、パディングまたは埋め込みが必要
 
         # CRITICAL FIX: Convert node features to float to avoid dtype mismatch with Mixed Precision (FP16)
         # PCQM4Mv2 node features are integers (atomic numbers), but models expect float input

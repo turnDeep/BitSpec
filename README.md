@@ -1,6 +1,8 @@
-# BitSpec - NEIMS v2.0: Neural EI-MS Prediction with Knowledge Distillation
+# NExtIMS - Next-Generation EI-MS Prediction with Knowledge Distillation
 
-次世代の電子衝撃イオン化マススペクトル（EI-MS）予測システム。Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテクチャを使用して、高精度かつ高速な質量スペクトル予測を実現します。
+**NExtIMS (Next Extended NEIMS)** は次世代の電子衝撃イオン化マススペクトル（EI-MS）予測システムです。Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテクチャを使用して、高精度かつ高速な質量スペクトル予測を実現します。
+
+NEIMS v1.0の進化版として、最先端の知識蒸留技術とメモリ効率的な大規模学習を実現しています。
 
 ## 特徴
 
@@ -62,8 +64,8 @@
 
 ```bash
 # リポジトリのクローン
-git clone https://github.com/turnDeep/BitSpec.git
-cd BitSpec
+git clone https://github.com/turnDeep/NExtIMS.git
+cd NExtIMS
 
 # PyTorch 2.7.0+ (CUDA 12.8対応)
 pip install --extra-index-url https://download.pytorch.org/whl/cu128 torch>=2.7.0
@@ -78,7 +80,7 @@ pip install -e .
 ## プロジェクト構造
 
 ```
-BitSpec/
+NExtIMS/
 ├── config.yaml                    # NEIMS v2.0 設定ファイル
 ├── config_pretrain.yaml           # Teacher事前学習設定
 ├── requirements.txt               # 依存関係
@@ -156,7 +158,7 @@ Phase 3: Student知識蒸留 (Teacherから学習)
 プロジェクトルートに以下のデータを配置:
 
 ```
-BitSpec/
+NExtIMS/
 ├── data/
 │   ├── NIST17.msp          # NIST EI-MSスペクトルデータ
 │   ├── mol_files/          # 対応するMOLファイル
@@ -799,8 +801,8 @@ MIT License
 
 ## お問い合わせ
 
-- **GitHub Issues**: https://github.com/turnDeep/BitSpec/issues
-- **プロジェクトURL**: https://github.com/turnDeep/BitSpec
+- **GitHub Issues**: https://github.com/turnDeep/NExtIMS/issues
+- **プロジェクトURL**: https://github.com/turnDeep/NExtIMS
 
 ## 更新履歴
 

@@ -1,10 +1,10 @@
-# BitSpec Claude Code ガイド
+# NExtIMS Claude Code ガイド
 
-このディレクトリにはBitSpecプロジェクト用のClaude Code設定が含まれています。
+このディレクトリにはNExtIMS (Next Extended NEIMS) プロジェクト用のClaude Code設定が含まれています。
 
 ## プロジェクト概要
 
-BitSpecは化学構造からマススペクトルを予測する深層学習システムです。Graph Convolutional Network (GCN)を使用して、SMILES文字列やMOLファイルから質量スペクトルを生成します。
+**NExtIMS** は次世代の電子衝撃イオン化マススペクトル（EI-MS）予測システムです。Teacher-Student Knowledge DistillationとMixture of Experts (MoE)アーキテクチャを使用して、化学構造から高精度な質量スペクトルを予測します。
 
 ## ディレクトリ構造
 

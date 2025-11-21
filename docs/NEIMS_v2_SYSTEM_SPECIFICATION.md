@@ -878,7 +878,7 @@ scheduler = OneCycleLR(
 ### 8.1 File Structure
 
 ```
-BitSpec/
+NExtIMS/
 ├── data/
 │   ├── nist/
 │   ├── massbank/
