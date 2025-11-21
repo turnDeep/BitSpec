@@ -2,8 +2,31 @@
 # RTX 50シリーズ(sm_120)対応の依存関係リスト
 # PyTorch 2.7.0以降でBlackwellアーキテクチャ(sm_120)を公式サポート
 
+# ==============================================================================
+# IMPORTANT: torch_scatter等のCUDA対応版インストール方法
+# ==============================================================================
+# このrequirements.txtは基本的な依存関係を定義していますが、torch_scatterなどの
+# PyG (PyTorch Geometric) 拡張ライブラリはPyTorchとCUDAのバージョンに厳密に
+# 一致する必要があります。
+#
+# 推奨インストール手順：
+# 1. まずPyTorchをインストール:
+#    pip install torch>=2.7.0 torchvision>=0.22.0 torchaudio>=2.7.0 \
+#        --index-url https://download.pytorch.org/whl/cu128
+#
+# 2. 次に提供されたスクリプトでtorch_scatterをインストール:
+#    bash install_torch_scatter_cuda.sh
+#
+# 3. 残りの依存関係をインストール:
+#    pip install -r requirements.txt
+#
+# または、手動でPyG拡張をインストール:
+#    pip install torch-scatter torch-sparse torch-cluster \
+#        -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__.split('+')[0])")+cu128.html
+# ==============================================================================
+
 # PyTorch (RTX 50対応の安定版 - CUDA 12.8)
---extra-index-url https://download.pytorch.org/whl/cu128
+# 注意: 先にPyTorchをインストールしてから、torch_scatterをインストールしてください
 torch>=2.7.0
 torchvision>=0.22.0
 torchaudio>=2.7.0
@@ -13,12 +36,16 @@ rdkit>=2023.9.1
 mordred>=1.2.0
 mol2vec>=0.1
 
-# グラフニューラルネットワーク (PyG公式ホイールリポジトリ)
---find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html
+# グラフニューラルネットワーク
+# 注意: これらはPyTorchインストール後にinstall_torch_scatter_cuda.shで
+# インストールすることを推奨します
 torch-geometric>=2.5.0
-torch-scatter>=2.1.2
-torch-sparse>=0.6.18
-torch-cluster>=1.6.3
+
+# PyG拡張 (CUDA対応版が必要 - install_torch_scatter_cuda.shを使用)
+# torch-scatter>=2.1.2
+# torch-sparse>=0.6.18
+# torch-cluster>=1.6.3
+# 上記はコメントアウト - install_torch_scatter_cuda.shで正しいバージョンをインストール
 
 # データ処理
 numpy>=1.24.0
