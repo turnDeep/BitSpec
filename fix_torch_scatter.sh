@@ -46,6 +46,8 @@ else
     # サフィックスがない場合、CUDAバージョンから推測
     if [ "$CUDA_VERSION" = "cpu" ] || [ "$CUDA_AVAILABLE" = "False" ]; then
         PYTORCH_CUDA_SUFFIX="cpu"
+    elif [[ "$CUDA_VERSION" == 12.9* ]]; then
+        PYTORCH_CUDA_SUFFIX="cu129"
     elif [[ "$CUDA_VERSION" == 12.8* ]]; then
         PYTORCH_CUDA_SUFFIX="cu128"
     elif [[ "$CUDA_VERSION" == 12.6* ]]; then
@@ -59,19 +61,41 @@ else
     elif [[ "$CUDA_VERSION" == 11.7* ]]; then
         PYTORCH_CUDA_SUFFIX="cu117"
     else
-        # デフォルトでcu118を使用（最も互換性が高い）
-        echo "警告: CUDAバージョンを検出できません。cu118を使用します"
-        PYTORCH_CUDA_SUFFIX="cu118"
+        # デフォルトでcu128を使用（最新かつ広範にサポート）
+        echo "警告: CUDAバージョンを検出できません。cu128を使用します"
+        PYTORCH_CUDA_SUFFIX="cu128"
     fi
 fi
 
 echo "使用するCUDAサフィックス: $PYTORCH_CUDA_SUFFIX"
 
-# PyTorchのメジャーバージョンを取得（2.7.0 -> 2.7.0）
+# PyTorchのメジャーバージョンを取得し、サポートされているバージョンにマッピング
 PYTORCH_BASE_VERSION=$PYTORCH_VERSION
 
+# PyGでサポートされている最新バージョンへのマッピング
+# torch_scatterのホイールが利用可能な最新バージョンは2.8.0
+PYTORCH_MAJOR=$(echo $PYTORCH_BASE_VERSION | cut -d. -f1)
+PYTORCH_MINOR=$(echo $PYTORCH_BASE_VERSION | cut -d. -f2)
+
+# PyTorch 2.9以降の場合、2.8.0にフォールバック
+if [ "$PYTORCH_MAJOR" -ge 2 ] && [ "$PYTORCH_MINOR" -ge 9 ]; then
+    echo ""
+    echo "警告: PyTorch $PYTORCH_BASE_VERSION はまだtorch_scatterでサポートされていません"
+    echo "      PyTorch 2.8.0用のホイールを試します（互換性がある可能性があります）"
+    PYTORCH_WHEEL_VERSION="2.8.0"
+elif [ "$PYTORCH_MAJOR" -ge 3 ]; then
+    echo ""
+    echo "警告: PyTorch $PYTORCH_BASE_VERSION はまだtorch_scatterでサポートされていません"
+    echo "      PyTorch 2.8.0用のホイールを試します（互換性がある可能性があります）"
+    PYTORCH_WHEEL_VERSION="2.8.0"
+else
+    PYTORCH_WHEEL_VERSION=$PYTORCH_BASE_VERSION
+fi
+
+echo "使用するホイールバージョン: $PYTORCH_WHEEL_VERSION"
+
 # Wheelページを構築
-WHEEL_URL="https://data.pyg.org/whl/torch-${PYTORCH_BASE_VERSION}+${PYTORCH_CUDA_SUFFIX}.html"
+WHEEL_URL="https://data.pyg.org/whl/torch-${PYTORCH_WHEEL_VERSION}+${PYTORCH_CUDA_SUFFIX}.html"
 
 echo ""
 echo "インストールURL: $WHEEL_URL"
@@ -111,10 +135,16 @@ echo "=========================================="
 echo "インストール確認"
 echo "=========================================="
 
+# WHEEL_URLを環境変数としてエクスポート
+export WHEEL_URL
+
 $PYTHON_CMD -c "
 import sys
 import torch
 import torch_scatter
+import os
+
+wheel_url = os.environ.get('WHEEL_URL', 'N/A')
 
 print(f'PyTorch: {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')
@@ -137,7 +167,12 @@ if torch.cuda.is_available():
         print('トラブルシューティング:')
         print('1. PyTorchとCUDAのバージョンを確認してください')
         print('2. 以下のコマンドで手動インストールを試してください:')
-        print(f'   pip install --force-reinstall --no-cache-dir torch-scatter -f {WHEEL_URL}')
+        print(f'   pip install --force-reinstall --no-cache-dir torch-scatter -f {wheel_url}')
+        print('')
+        print('3. または、ソースからビルドを試してください:')
+        print('   pip install git+https://github.com/rusty1s/pytorch_scatter.git')
+        print('')
+        print('4. それでも失敗する場合は、コードのランタイムフォールバックが自動的に使用されます')
         sys.exit(1)
 else:
     print('')
