@@ -6,11 +6,18 @@ NEIMS v2.0 Evaluation Script
 Evaluates Student model on test set with comprehensive metrics.
 """
 
+import sys
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import argparse
 import yaml
 import torch
 import logging
-from pathlib import Path
 
 from src.models.student import StudentModel
 
