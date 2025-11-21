@@ -75,117 +75,119 @@ model:
     edge_features: 6            # Bond features
     spectrum_dim: 501
 
-# 事前学習設定（Phase 1）
-pretraining:
-  # データセット設定
-  dataset: "PCQM4Mv2"
-  data_path: "data/pcqm4mv2"
-  task: "bond_masking"          # Self-supervised task
+# 訓練設定
+training:
+  # Phase 1: Teacher事前学習（PCQM4Mv2）
+  teacher_pretrain:
+    # データセット設定
+    dataset: "PCQM4Mv2"
+    data_path: "data/pcqm4mv2"
+    task: "bond_masking"          # Self-supervised task
 
-  # 訓練設定（RTX 5070 Ti 16GB最適化）
-  batch_size: 128               # 安定性重視
-  num_epochs: 50                # NEIMS v2.0仕様
-  num_workers: 8                # Ryzen 7700: 8コア
-  prefetch_factor: 4
-  gradient_accumulation_steps: 1
-  learning_rate: 1.0e-4         # AdamW推奨値
-  weight_decay: 1.0e-5
+    # 訓練設定（RTX 5070 Ti 16GB最適化）
+    batch_size: 128               # 安定性重視
+    num_epochs: 50                # NEIMS v2.0仕様
+    num_workers: 8                # Ryzen 7700: 8コア
+    prefetch_factor: 4
+    gradient_accumulation_steps: 1
+    learning_rate: 1.0e-4         # AdamW推奨値
+    weight_decay: 1.0e-5
 
-  # Optimizer & Scheduler
-  optimizer: "AdamW"
-  scheduler: "CosineAnnealingWarmRestarts"
-  scheduler_t0: 10
-  scheduler_tmult: 2
+    # Optimizer & Scheduler
+    optimizer: "AdamW"
+    scheduler: "CosineAnnealingWarmRestarts"
+    scheduler_t0: 10
+    scheduler_tmult: 2
 
-  # 正則化
-  gradient_clip: 1.0
-  dropout: 0.3
+    # 正則化
+    gradient_clip: 1.0
+    dropout: 0.3
 
-  # 混合精度訓練
-  use_amp: true
+    # 混合精度訓練
+    use_amp: true
 
-  # 保存設定
-  checkpoint_dir: "checkpoints/teacher"
-  save_interval: 10
+    # 保存設定
+    checkpoint_dir: "checkpoints/teacher"
+    save_interval: 10
 
-  # データサブセット（デバッグ用）
-  use_subset: null              # 例: 10000
+    # データサブセット（デバッグ用）
+    use_subset: null              # 例: 10000
 
-  # ロギング
-  use_wandb: false
-  wandb_project: "neims-v2-teacher-pretrain"
+    # ロギング
+    use_wandb: false
+    wandb_project: "neims-v2-teacher-pretrain"
 
-  # Bond Masking設定
-  bond_masking:
-    mask_ratio: 0.15            # 15%のbondをマスク
-    lambda_bond: 0.1            # Bond masking loss weight
+    # Bond Masking設定
+    bond_masking:
+      mask_ratio: 0.15            # 15%のbondをマスク
+      lambda_bond: 0.1            # Bond masking loss weight
 
-# ファインチューニング設定（Phase 2）
-finetuning:
-  # 事前学習済みモデル
-  pretrained_checkpoint: "checkpoints/teacher/pretrained_teacher.pt"
+  # Phase 2: Teacherファインチューニング（NIST EI-MS）
+  teacher_finetune:
+    # 事前学習済みモデル
+    pretrained_checkpoint: "checkpoints/teacher/pretrained_teacher.pt"
 
-  # データセット
-  dataset: "NIST_EIMS"
+    # データセット
+    dataset: "NIST_EIMS"
 
-  # 訓練設定（RTX 5070 Ti 16GB最適化）
-  batch_size: 32                # MC Dropout用に小さめ
-  num_epochs: 100               # NEIMS v2.0仕様
-  num_workers: 8
-  prefetch_factor: 4
-  persistent_workers: true
-  gradient_accumulation_steps: 1
-  learning_rate: 1.0e-4
-  weight_decay: 1.0e-5
+    # 訓練設定（RTX 5070 Ti 16GB最適化）
+    batch_size: 32                # MC Dropout用に小さめ
+    num_epochs: 100               # NEIMS v2.0仕様
+    num_workers: 8
+    prefetch_factor: 4
+    persistent_workers: true
+    gradient_accumulation_steps: 1
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-5
 
-  # Optimizer & Scheduler
-  optimizer: "AdamW"
-  scheduler: "CosineAnnealingWarmRestarts"
-  scheduler_t0: 10
-  scheduler_tmult: 2
+    # Optimizer & Scheduler
+    optimizer: "AdamW"
+    scheduler: "CosineAnnealingWarmRestarts"
+    scheduler_t0: 10
+    scheduler_tmult: 2
 
-  # 正則化
-  gradient_clip: 1.0
-  dropout: 0.3
+    # 正則化
+    gradient_clip: 1.0
+    dropout: 0.3
 
-  # MC Dropout設定
-  mc_dropout:
-    enabled: true
-    n_samples: 30               # Uncertainty estimation
-    dropout_rate: 0.3
-
-  # 混合精度訓練
-  use_amp: true
-
-  # 損失関数
-  loss_function:
-    type: "MSE"
-    lambda_spectrum: 1.0
-    lambda_bond: 0.0            # Finetuning時はBond Maskingなし
-
-  # 保存設定
-  checkpoint_dir: "checkpoints/teacher"
-  save_interval: 5
-
-  # Early Stopping
-  early_stopping:
-    patience: 20
-    min_delta: 0.0001
-
-  # ロギング
-  use_wandb: false
-  wandb_project: "neims-v2-teacher-finetune"
-
-  # データ拡張
-  augmentation:
-    lds:
+    # MC Dropout設定
+    mc_dropout:
       enabled: true
-      sigma: 1.5                # m/z units
-    isotope:
-      enabled: true
-      probability: 0.05
-    conformer:
-      enabled: false            # Finetuning時は無効
+      n_samples: 30               # Uncertainty estimation
+      dropout_rate: 0.3
+
+    # 混合精度訓練
+    use_amp: true
+
+    # 損失関数
+    loss_function:
+      type: "MSE"
+      lambda_spectrum: 1.0
+      lambda_bond: 0.0            # Finetuning時はBond Maskingなし
+
+    # 保存設定
+    checkpoint_dir: "checkpoints/teacher"
+    save_interval: 5
+
+    # Early Stopping
+    early_stopping:
+      patience: 20
+      min_delta: 0.0001
+
+    # ロギング
+    use_wandb: false
+    wandb_project: "neims-v2-teacher-finetune"
+
+    # データ拡張
+    augmentation:
+      lds:
+        enabled: true
+        sigma: 1.5                # m/z units
+      isotope:
+        enabled: true
+        probability: 0.05
+      conformer:
+        enabled: false            # Finetuning時は無効
 
 # GPU設定（RTX 5070 Ti 16GB最適化）
 gpu:
