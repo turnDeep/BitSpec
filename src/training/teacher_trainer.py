@@ -10,7 +10,7 @@ and finetuning (Spectrum Prediction with MC Dropout).
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 import logging
 from pathlib import Path
@@ -61,7 +61,7 @@ class TeacherTrainer:
 
         # Mixed precision training
         self.use_amp = self.train_config.get('use_amp', True)
-        self.scaler = GradScaler() if self.use_amp else None
+        self.scaler = GradScaler(device) if self.use_amp else None
 
         # Gradient clipping
         self.gradient_clip = self.train_config.get('gradient_clip', 1.0)
@@ -155,7 +155,7 @@ class TeacherTrainer:
                 bond_targets = batch['bond_targets'].to(self.device)
 
             # Forward pass with mixed precision
-            with autocast(enabled=self.use_amp):
+            with autocast(self.device, enabled=self.use_amp):
                 # Model forward
                 predicted_spectrum = self.model(graph_data, ecfp, dropout=True)
 
@@ -242,7 +242,7 @@ class TeacherTrainer:
             ecfp = batch['ecfp'].to(self.device)
             target_spectrum = batch['spectrum'].to(self.device)
 
-            with autocast(enabled=self.use_amp):
+            with autocast(self.device, enabled=self.use_amp):
                 if use_mc_dropout and self.phase == 'finetune':
                     # MC Dropout uncertainty estimation
                     predicted_spectrum, uncertainty = self.model.predict_with_uncertainty(

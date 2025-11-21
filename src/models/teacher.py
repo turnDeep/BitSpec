@@ -10,12 +10,55 @@ for high-accuracy mass spectrum prediction with uncertainty estimation.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GINEConv, global_add_pool, global_mean_pool, global_max_pool
+from torch_geometric.nn import GINEConv
 from torch_geometric.nn import PairNorm
 from rdkit import Chem
 from rdkit.Chem import AllChem
 import numpy as np
 from typing import Tuple, Optional
+
+# Try to import torch_scatter-based pooling, fallback to native PyTorch
+try:
+    from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
+    _USE_TORCH_SCATTER = True
+except Exception:
+    _USE_TORCH_SCATTER = False
+
+# Native PyTorch pooling fallback implementations
+def _native_global_add_pool(x, batch, size=None):
+    """Native PyTorch implementation of global_add_pool"""
+    if size is None:
+        size = int(batch.max().item()) + 1
+    out = torch.zeros(size, x.size(1), dtype=x.dtype, device=x.device)
+    out.index_add_(0, batch, x)
+    return out
+
+def _native_global_mean_pool(x, batch, size=None):
+    """Native PyTorch implementation of global_mean_pool"""
+    if size is None:
+        size = int(batch.max().item()) + 1
+    out = torch.zeros(size, x.size(1), dtype=x.dtype, device=x.device)
+    count = torch.zeros(size, dtype=x.dtype, device=x.device)
+    out.index_add_(0, batch, x)
+    count.index_add_(0, batch, torch.ones_like(x[:, 0]))
+    return out / count.unsqueeze(-1).clamp(min=1)
+
+def _native_global_max_pool(x, batch, size=None):
+    """Native PyTorch implementation of global_max_pool"""
+    if size is None:
+        size = int(batch.max().item()) + 1
+    out = torch.full((size, x.size(1)), float('-inf'), dtype=x.dtype, device=x.device)
+    for i in range(size):
+        mask = batch == i
+        if mask.any():
+            out[i] = x[mask].max(dim=0)[0]
+    return out
+
+# Use native implementations if torch_scatter is not available
+if not _USE_TORCH_SCATTER:
+    global_add_pool = _native_global_add_pool
+    global_mean_pool = _native_global_mean_pool
+    global_max_pool = _native_global_max_pool
 
 # Import BidirectionalModule
 try:
