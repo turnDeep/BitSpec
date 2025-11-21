@@ -19,6 +19,7 @@ from typing import Dict, Optional
 from src.training.losses import StudentDistillationLoss, GradNormWeighting
 from src.training.schedulers import TemperatureScheduler
 from src.models.modules import FeatureProjection
+from src.models.moe import load_balancing_loss, entropy_regularization
 
 
 class StudentTrainer:
@@ -160,6 +161,12 @@ class StudentTrainer:
         total_entropy_loss = 0.0
         num_batches = 0
 
+        # Initialize GradNorm if needed (and not already initialized)
+        if self.use_gradnorm and epoch >= self.warmup_epochs and self.gradnorm is None:
+             # We need initial losses. If we are resuming or starting late, we might not have them.
+             # We will rely on the first batch of this epoch to set them if they are missing.
+             pass
+
         # Expert usage tracking
         expert_counts = torch.zeros(4, device=self.device)
 
@@ -204,37 +211,146 @@ class StudentTrainer:
                 student_features_raw = self.student.get_hidden_features(ecfp_count_fp)
                 student_features = self.feature_projection(student_features_raw)
 
-                # Compute distillation loss
-                loss, loss_dict = self.criterion(
-                    student_output=student_output,
-                    teacher_mean=teacher_mean,
-                    teacher_std=teacher_std,
-                    nist_spectrum=nist_spectrum,
-                    student_features=student_features,
-                    teacher_features=teacher_features,
-                    expert_weights=expert_weights,
-                    expert_indices=expert_indices,
-                    temperature=temperature
+                # Compute distillation loss components explicitly for GradNorm
+                loss_hard_tensor = torch.nn.functional.mse_loss(student_output, nist_spectrum)
+
+                loss_soft_tensor = self.criterion._compute_soft_loss(
+                    student_output,
+                    teacher_mean,
+                    teacher_std,
+                    temperature
                 )
+
+                loss_feature_tensor = torch.nn.functional.mse_loss(student_features, teacher_features)
+
+                loss_load_tensor = load_balancing_loss(expert_weights, expert_indices)
+                loss_entropy_tensor = entropy_regularization(expert_weights)
+
+                # Total Loss
+                loss = (
+                    self.criterion.alpha * loss_hard_tensor +
+                    self.criterion.beta * loss_soft_tensor +
+                    self.criterion.gamma * loss_feature_tensor +
+                    self.criterion.delta_load * loss_load_tensor +
+                    self.criterion.delta_entropy * loss_entropy_tensor
+                )
+
+                loss_dict = {
+                    'total_loss': loss.item(),
+                    'hard_loss': loss_hard_tensor.item(),
+                    'soft_loss': loss_soft_tensor.item(),
+                    'feature_loss': loss_feature_tensor.item(),
+                    'load_loss': loss_load_tensor.item(),
+                    'entropy_loss': loss_entropy_tensor.item(),
+                    'alpha': self.criterion.alpha,
+                    'beta': self.criterion.beta,
+                    'gamma': self.criterion.gamma
+                }
 
             # Backward pass
             self.optimizer.zero_grad()
 
+            # Define shared parameters for GradNorm (Gate + Experts)
+            # This targets the main body of the Student model.
+            shared_params = list(self.student.gate.parameters()) + list(self.student.experts.parameters())
+
             if self.use_amp:
-                self.scaler.scale(loss).backward()
+                self.scaler.scale(loss).backward(retain_graph=self.use_gradnorm)
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     list(self.student.parameters()) + list(self.feature_projection.parameters()),
                     self.gradient_clip
                 )
+
+                # GradNorm Update
+                if self.use_gradnorm and epoch >= self.warmup_epochs:
+                     if self.initial_losses is None:
+                         self.initial_losses = {
+                             'hard': loss_dict['hard_loss'],
+                             'soft': loss_dict['soft_loss'],
+                             'feature': loss_dict['feature_loss']
+                         }
+
+                     if self.gradnorm is None:
+                        self.gradnorm = GradNormWeighting(
+                            self.initial_losses,
+                            alpha=1.5,
+                            gradient_clip_range=tuple(self.distill_config['gradient_clip_range'])
+                        )
+
+                     current_loss_tensors = {
+                         'hard': loss_hard_tensor,
+                         'soft': loss_soft_tensor,
+                         'feature': loss_feature_tensor
+                     }
+
+                     current_weights = {
+                         'alpha': self.criterion.alpha,
+                         'beta': self.criterion.beta,
+                         'gamma': self.criterion.gamma
+                     }
+
+                     new_weights = self.gradnorm.compute_weights(
+                         current_loss_tensors,
+                         current_weights,
+                         shared_params
+                     )
+
+                     self.criterion.update_weights(
+                         new_weights['alpha'],
+                         new_weights['beta'],
+                         new_weights['gamma']
+                     )
+
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                loss.backward()
+                loss.backward(retain_graph=self.use_gradnorm)
                 torch.nn.utils.clip_grad_norm_(
                     list(self.student.parameters()) + list(self.feature_projection.parameters()),
                     self.gradient_clip
                 )
+
+                # GradNorm Update
+                if self.use_gradnorm and epoch >= self.warmup_epochs:
+                     if self.initial_losses is None:
+                         self.initial_losses = {
+                             'hard': loss_dict['hard_loss'],
+                             'soft': loss_dict['soft_loss'],
+                             'feature': loss_dict['feature_loss']
+                         }
+
+                     if self.gradnorm is None:
+                        self.gradnorm = GradNormWeighting(
+                            self.initial_losses,
+                            alpha=1.5,
+                            gradient_clip_range=tuple(self.distill_config['gradient_clip_range'])
+                        )
+
+                     current_loss_tensors = {
+                         'hard': loss_hard_tensor,
+                         'soft': loss_soft_tensor,
+                         'feature': loss_feature_tensor
+                     }
+
+                     current_weights = {
+                         'alpha': self.criterion.alpha,
+                         'beta': self.criterion.beta,
+                         'gamma': self.criterion.gamma
+                     }
+
+                     new_weights = self.gradnorm.compute_weights(
+                         current_loss_tensors,
+                         current_weights,
+                         shared_params
+                     )
+
+                     self.criterion.update_weights(
+                         new_weights['alpha'],
+                         new_weights['beta'],
+                         new_weights['gamma']
+                     )
+
                 self.optimizer.step()
 
             # Update expert bias (auxiliary-loss-free load balancing)
@@ -261,7 +377,7 @@ class StudentTrainer:
             total_entropy_loss += loss_dict['entropy_loss']
             num_batches += 1
 
-            # Store initial losses for GradNorm
+            # Store initial losses for GradNorm (if not set yet)
             if self.initial_losses is None and batch_idx == 0:
                 self.initial_losses = {
                     'hard': loss_dict['hard_loss'],
@@ -276,31 +392,6 @@ class StudentTrainer:
                 'β': f"{loss_dict['beta']:.2f}",
                 'γ': f"{loss_dict['gamma']:.2f}"
             })
-
-        # GradNorm weight update (after warmup)
-        if self.use_gradnorm and epoch >= self.warmup_epochs and self.initial_losses:
-            if self.gradnorm is None:
-                self.gradnorm = GradNormWeighting(
-                    self.initial_losses,
-                    alpha=1.5,
-                    gradient_clip_range=tuple(self.distill_config['gradient_clip_range'])
-                )
-
-            # Update loss weights
-            current_losses = {
-                'hard': total_hard_loss / num_batches,
-                'soft': total_soft_loss / num_batches,
-                'feature': total_feature_loss / num_batches
-            }
-            loss_weights = {
-                'alpha': self.criterion.alpha,
-                'beta': self.criterion.beta,
-                'gamma': self.criterion.gamma
-            }
-
-            # Note: GradNorm requires actual gradient computation
-            # This is a simplified version; full implementation would
-            # compute gradients for each loss term separately
 
         # Compute averages
         metrics = {

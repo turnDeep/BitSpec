@@ -210,7 +210,7 @@ class GradNormWeighting:
 
     def compute_weights(
         self,
-        current_losses: Dict[str, float],
+        current_losses: Dict[str, torch.Tensor], # Now accepts Tensors
         loss_weights: Dict[str, float],
         model_params
     ) -> Dict[str, float]:
@@ -218,21 +218,26 @@ class GradNormWeighting:
         Compute updated loss weights using GradNorm
 
         Args:
-            current_losses: Current loss values {'hard': ..., 'soft': ..., 'feature': ...}
+            current_losses: Current loss tensors (with grad) {'hard': ..., 'soft': ..., 'feature': ...}
             loss_weights: Current weights {'alpha': ..., 'beta': ..., 'gamma': ...}
-            model_params: Model parameters for gradient computation
+            model_params: Model parameters (iterable) for gradient computation
 
         Returns:
             updated_weights: Updated loss weights
         """
+        # Ensure model_params is a list
+        model_params = list(model_params)
+
         # Compute gradient norms for each loss
         grad_norms = {}
 
-        for loss_name, loss_value in current_losses.items():
-            # Create computation graph for this loss
-            loss_tensor = torch.tensor(loss_value, requires_grad=True)
+        for loss_name, loss_tensor in current_losses.items():
+            # Weighted loss is what's usually backpropped, but GradNorm typically looks at
+            # gradients of the *unweighted* individual losses w.r.t shared weights.
+            # Here we assume loss_tensor is the unweighted loss.
 
-            # Compute gradients
+            # Compute gradients w.r.t. model_params
+            # We use retain_graph=True because we might need the graph for subsequent backward() or other losses
             grads = torch.autograd.grad(
                 loss_tensor,
                 model_params,
@@ -241,24 +246,31 @@ class GradNormWeighting:
                 allow_unused=True
             )
 
-            # Compute gradient norm
-            grad_norm = torch.sqrt(sum(torch.sum(g ** 2) for g in grads if g is not None))
+            # Compute L2 norm of gradients
+            # Filter out None grads (params unused by this specific loss)
+            valid_grads = [g for g in grads if g is not None]
+            if not valid_grads:
+                 grad_norm = torch.tensor(0.0, device=loss_tensor.device)
+            else:
+                 grad_norm = torch.sqrt(sum(torch.sum(g ** 2) for g in valid_grads))
+
             grad_norms[loss_name] = grad_norm.item()
 
         # Compute average gradient norm
-        avg_grad_norm = sum(grad_norms.values()) / len(grad_norms)
+        avg_grad_norm = sum(grad_norms.values()) / max(len(grad_norms), 1)
 
         # Compute loss ratios
         loss_ratios = {}
-        for loss_name, loss_value in current_losses.items():
+        for loss_name, loss_tensor in current_losses.items():
+            loss_value = loss_tensor.item()
             initial_loss = self.initial_losses[loss_name]
             loss_ratio = loss_value / (initial_loss + 1e-8)
             loss_ratios[loss_name] = loss_ratio ** self.alpha
 
         # Compute target gradient norms
-        avg_loss_ratio = sum(loss_ratios.values()) / len(loss_ratios)
+        avg_loss_ratio = sum(loss_ratios.values()) / max(len(loss_ratios), 1)
         target_grad_norms = {
-            name: avg_grad_norm * (ratio / avg_loss_ratio)
+            name: avg_grad_norm * (ratio / (avg_loss_ratio + 1e-8))
             for name, ratio in loss_ratios.items()
         }
 
@@ -279,11 +291,12 @@ class GradNormWeighting:
 
                 updated_weights[weight_name] = current_weight * ratio.item()
             else:
-                updated_weights[weight_name] = loss_weights[weight_name]
+                updated_weights[weight_name] = loss_weights.get(weight_name, 0.0)
 
         # Normalize weights to sum to 1.0
         total = sum(updated_weights.values())
-        updated_weights = {k: v / total for k, v in updated_weights.items()}
+        if total > 0:
+            updated_weights = {k: v / total for k, v in updated_weights.items()}
 
         return updated_weights
 
