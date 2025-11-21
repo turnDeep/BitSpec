@@ -38,9 +38,11 @@ Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテ�
 - **RAM**: 32GB DDR4/DDR5（🆕 メモリ効率モードでNIST17全データ対応）
 - **ストレージ**: 1TB SSD
 - **OS**: Ubuntu 20.04+ / Windows 11 with WSL2
-- **CUDA**: 12.8+
-- **PyTorch**: 2.7.0+
+- **CUDA**: 12.4+ (推奨: 12.4、最新: 12.8)
+- **PyTorch**: 2.5.1+ (推奨: 2.5.1、最新: 2.7.0)
 - **Python**: 3.10+
+
+**重要**: torch-scatter の CUDA サポートを確実にするため、**PyTorch 2.5.1 + CUDA 12.4** の組み合わせを推奨します。この構成では PyG のビルド済み CUDA ホイールが利用可能です。
 
 **💡 メモリ最適化:**
 - 従来: NIST17全データ（30万化合物）に64GB RAM必要
@@ -61,19 +63,73 @@ Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテ�
 
 ### 方法2: ローカルインストール
 
+#### 推奨: 自動インストールスクリプト (PyTorch 2.5.1 + CUDA 12.4)
+
+**torch-scatter の CUDA サポートを確実にインストール:**
+
 ```bash
 # リポジトリのクローン
-git clone https://github.com/turnDeep/BitSpec.git
-cd BitSpec
+git clone https://github.com/turnDeep/NExtIMS.git
+cd NExtIMS
 
-# PyTorch 2.7.0+ (CUDA 12.8対応)
-pip install --extra-index-url https://download.pytorch.org/whl/cu128 torch>=2.7.0
+# 自動インストールスクリプトを実行
+bash install_dependencies.sh
+```
 
-# 依存関係のインストール
+このスクリプトは以下を自動的に実行します：
+1. Python 3.10+ の確認
+2. CUDA 環境の確認
+3. PyTorch 2.5.1 (CUDA 12.4) のインストール
+4. **torch-scatter などの CUDA 対応ビルド済みホイールのインストール**
+5. 残りの依存関係のインストール
+6. torch-scatter の CUDA サポート検証
+
+**注意**: PyTorch 2.5.1 は安定性が高く、RTX 50 シリーズを含む CUDA 12.4 対応 GPU で動作します。torch-scatter の CUDA ビルド済みホイールが確実に利用できます。
+
+#### 手動インストール
+
+```bash
+# リポジトリのクローン
+git clone https://github.com/turnDeep/NExtIMS.git
+cd NExtIMS
+
+# PyTorch 2.5.1 (CUDA 12.4対応)
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu124
+
+# torch-scatter などの PyG 拡張 (CUDA 対応)
+pip install torch-scatter==2.1.2+pt25cu124 \
+    torch-sparse==0.6.18+pt25cu124 \
+    torch-cluster==1.6.3+pt25cu124 \
+    torch-spline-conv==1.2.2+pt25cu124 \
+    -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
+
+# 残りの依存関係のインストール
 pip install -r requirements.txt
 
 # パッケージのインストール
 pip install -e .
+```
+
+#### torch-scatter CUDA サポートの確認
+
+インストール後、以下のコマンドで CUDA サポートを確認できます：
+
+```bash
+python -c "
+import torch
+import torch_scatter
+
+print(f'PyTorch version: {torch.__version__}')
+print(f'CUDA available: {torch.cuda.is_available()}')
+print(f'torch-scatter version: {torch_scatter.__version__}')
+
+if torch.cuda.is_available():
+    x = torch.randn(10, 16).cuda()
+    index = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, 4, 4]).cuda()
+    out = torch_scatter.scatter_mean(x, index, dim=0)
+    print('torch-scatter CUDA: OK')
+"
 ```
 
 ## プロジェクト構造
@@ -710,6 +766,45 @@ MSPファイルのIDとMOLファイル名のIDが対応している必要があ�
 
 ## トラブルシューティング
 
+### torch-scatter が CUDA サポートなしでコンパイルされている
+
+**症状**: "torch_scatter was compiled without CUDA support" などのエラーが出る
+
+**原因**:
+- PyTorch のバージョンが新しすぎて、PyG のビルド済み CUDA ホイールが存在しない
+- pip の依存関係解決で torch-scatter が CPU 版でインストールされた
+
+**解決方法**:
+
+```bash
+# 1. 既存のインストールをアンインストール
+pip uninstall torch torch-scatter torch-sparse torch-cluster torch-geometric -y
+
+# 2. 自動インストールスクリプトを使用（推奨）
+bash install_dependencies.sh
+
+# または、手動で正しい順序でインストール
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu124
+
+pip install torch-scatter==2.1.2+pt25cu124 \
+    torch-sparse==0.6.18+pt25cu124 \
+    torch-cluster==1.6.3+pt25cu124 \
+    torch-spline-conv==1.2.2+pt25cu124 \
+    -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
+
+# 3. CUDA サポートを確認
+python -c "
+import torch
+import torch_scatter
+print(f'torch-scatter CUDA: {torch.cuda.is_available()}')
+x = torch.randn(10, 16).cuda()
+index = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, 4, 4]).cuda()
+out = torch_scatter.scatter_mean(x, index, dim=0)
+print('torch-scatter CUDA support: OK')
+"
+```
+
 ### GPU が認識されない
 
 ```bash
@@ -804,6 +899,15 @@ MIT License
 - **プロジェクトURL**: https://github.com/turnDeep/BitSpec
 
 ## 更新履歴
+
+- **v2.0.2** (2025-11-21): torch-scatter CUDA サポート問題の修正
+  - **PyTorch バージョン変更**: 2.7.0+cu128 → 2.5.1+cu124（安定性重視）
+  - **torch-scatter CUDA サポート**: ビルド済みホイール使用で確実な CUDA サポート
+  - **自動インストールスクリプト追加**: `install_dependencies.sh` で依存関係を正しい順序でインストール
+  - **requirements.txt 更新**: torch-scatter==2.1.2+pt25cu124 など具体的なバージョン指定
+  - **README 更新**: インストール手順とトラブルシューティングセクション拡充
+  - **理由**: PyTorch 2.7.0 は新しすぎて PyG のビルド済み CUDA ホイールが未対応のため、
+    安定した 2.5.1 + CUDA 12.4 の組み合わせに変更。RTX 50 シリーズも CUDA 12.4 で動作可能。
 
 - **v2.0.1** (2025-11-20): 完全データセット統合とトレーニングパイプライン実装
   - **データセットローダー完全実装**:

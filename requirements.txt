@@ -1,12 +1,14 @@
 # requirements.txt
 # RTX 50シリーズ(sm_120)対応の依存関係リスト
-# PyTorch 2.7.0以降でBlackwellアーキテクチャ(sm_120)を公式サポート
+# PyTorch 2.5.1 + CUDA 12.4 で安定した torch-scatter CUDA サポート
 
-# PyTorch (RTX 50対応の安定版 - CUDA 12.8)
---extra-index-url https://download.pytorch.org/whl/cu128
-torch>=2.7.0
-torchvision>=0.22.0
-torchaudio>=2.7.0
+# PyTorch (RTX 50対応の安定版 - CUDA 12.4)
+# NOTE: PyTorch 2.5.1 は sm_120 (RTX 50) をサポートしており、
+# torch-scatter の CUDA ビルド済みホイールが利用可能
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
 
 # 化学構造処理
 rdkit>=2023.9.1
@@ -14,11 +16,13 @@ mordred>=1.2.0
 mol2vec>=0.1
 
 # グラフニューラルネットワーク (PyG公式ホイールリポジトリ)
---find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html
+# NOTE: torch-scatter を先にインストールして CUDA サポートを確保
+--find-links https://data.pyg.org/whl/torch-2.5.0+cu124.html
+torch-scatter==2.1.2+pt25cu124
+torch-sparse==0.6.18+pt25cu124
+torch-cluster==1.6.3+pt25cu124
+torch-spline-conv==1.2.2+pt25cu124
 torch-geometric>=2.5.0
-torch-scatter>=2.1.2
-torch-sparse>=0.6.18
-torch-cluster>=1.6.3
 
 # データ処理
 numpy>=1.24.0
