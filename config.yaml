@@ -33,6 +33,25 @@ data:
   max_mz: 500          # NEIMS v2.0: m/z 0-500
   mz_bin_size: 1.0
   min_intensity: 0.001
+
+  # メモリ効率化設定（32GB RAM対応）
+  memory_efficient_mode:
+    enabled: true                        # 遅延読み込みを有効化
+    use_lazy_loading: true               # LazyMassSpecDatasetを使用
+    lazy_cache_dir: "data/processed/lazy_cache"
+    precompute_graphs: false             # グラフをオンザフライで生成（メモリ節約）
+    max_samples_full_dataset: 300000     # NIST17フルデータセット
+
+    # 32GB RAM環境での推奨設定
+    ram_32gb_mode:
+      # データセット制限（必要に応じて調整）
+      # None = 全データ使用（推奨: 遅延読み込みで対応可能）
+      # 50000-100000 = 安全なサブセット
+      max_training_samples: null         # Noneで全データ使用
+
+      # メモリ最適化
+      gradient_accumulation: 2           # バッチサイズを実質半分に
+      empty_cache_frequency: 50          # 50イテレーションごとにキャッシュクリア
   
 # モデル設定
 model:
