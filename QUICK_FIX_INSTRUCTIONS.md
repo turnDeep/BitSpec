@@ -37,31 +37,21 @@ bash /workspace/fix_torch_scatter_in_container.sh
 4. 失敗した場合は、ソースからCUDA対応ビルド
 5. インストールを検証
 
-### オプション2: Dockerfile を修正して再ビルド
+### オプション2: コンテナを再ビルド（改善版Dockerfile）
 
-より確実な方法として、Dockerfileを修正します：
+**✨ Dockerfileは既に改善されています！** (commit ae9db48)
 
-**`.devcontainer/Dockerfile` の 110-115行目を以下に置き換えてください：**
+Dockerfileに自動フォールバックロジックが追加されました：
+- まずビルド済みホイールのインストールを試行
+- 失敗した場合、自動的にソースからCUDA対応ビルド
 
-```dockerfile
-# torch_scatterなど拡張ライブラリをソースからCUDA対応ビルド
-# ビルド済みホイールが見つからない場合に備えてソースビルドを強制
-RUN TORCH_VERSION=$(python -c "import torch; print(torch.__version__.split('+')[0])") && \
-    CUDA_VERSION=$(python -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
-    echo "Installing PyG extensions for PyTorch ${TORCH_VERSION} with ${CUDA_VERSION}" && \
-    (pip install --no-cache-dir --no-build-isolation \
-    torch-scatter torch-sparse torch-cluster torch-spline-conv \
-    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html || \
-    (echo "⚠️  Wheels not found, building from source with CUDA support..." && \
-     TORCH_CUDA_ARCH_LIST="9.0;12.0" FORCE_CUDA=1 \
-     pip install --no-cache-dir --no-build-isolation \
-     torch-scatter torch-sparse torch-cluster torch-spline-conv))
-```
+コンテナを再ビルドするだけで問題が解決します：
 
-その後、コンテナを再ビルド：
 ```bash
 # VSCode: Command Palette (Ctrl+Shift+P) → "Dev Containers: Rebuild Container"
 ```
+
+**注意**: 初回のソースビルドには5-10分かかる場合があります。
 
 ### オプション3: 手動でインストール（デバッグ用）
 
