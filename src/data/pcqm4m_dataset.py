@@ -15,7 +15,7 @@ from torch.utils.data import Dataset
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdFingerprintGenerator
 from torch_geometric.data import Data
 import logging
 
@@ -144,7 +144,8 @@ def mol_to_graph_with_mask(
 
 def mol_to_ecfp(mol: Chem.Mol, radius: int = 2, n_bits: int = 4096) -> np.ndarray:
     """Generate ECFP4 fingerprint"""
-    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits)
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
+    fp = mfpgen.GetFingerprint(mol)
     return np.array(fp, dtype=np.float32)
 
 

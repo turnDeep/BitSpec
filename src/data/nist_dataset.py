@@ -18,7 +18,7 @@ from torch.utils.data import Dataset
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdFingerprintGenerator
 from torch_geometric.data import Data
 import logging
 
@@ -177,7 +177,8 @@ def mol_to_ecfp(mol: Chem.Mol, radius: int = 2, n_bits: int = 4096) -> np.ndarra
     Returns:
         ecfp: Binary fingerprint [4096]
     """
-    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits)
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
+    fp = mfpgen.GetFingerprint(mol)
     return np.array(fp, dtype=np.float32)
 
 
@@ -188,7 +189,8 @@ def mol_to_count_fp(mol: Chem.Mol, radius: int = 2, n_bits: int = 2048) -> np.nd
     Returns:
         count_fp: Count fingerprint [2048]
     """
-    fp = AllChem.GetHashedMorganFingerprint(mol, radius, nBits=n_bits)
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
+    fp = mfpgen.GetCountFingerprint(mol)
     arr = np.zeros(n_bits, dtype=np.float32)
     for idx, val in fp.GetNonzeroElements().items():
         arr[idx] = min(val, 255)  # Cap at 255
