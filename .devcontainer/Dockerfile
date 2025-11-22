@@ -133,7 +133,8 @@ RUN pip install --no-cache-dir \
 
 # 非rootユーザーの作成
 RUN useradd -m -s /bin/bash devuser && \
-    chown -R devuser:devuser /workspace
+    chown -R devuser:devuser /workspace && \
+    chown -R devuser:devuser /opt/venv
 
 # bashrcの設定: ターミナル起動時に自動で仮想環境を有効化
 RUN echo "source /opt/venv/bin/activate" >> /home/devuser/.bashrc && \
