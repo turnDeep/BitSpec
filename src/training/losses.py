@@ -34,8 +34,8 @@ class TeacherLoss(nn.Module):
         Args:
             predicted_spectrum: [batch_size, 501]
             target_spectrum: [batch_size, 501]
-            bond_predictions: [E, 1] (optional, for pretraining)
-            bond_targets: [E] (optional, for pretraining)
+            bond_predictions: [num_masked_bonds, 4] (optional, for pretraining)
+            bond_targets: [num_masked_bonds, 4] (optional, for pretraining)
 
         Returns:
             loss: Total loss
@@ -48,12 +48,15 @@ class TeacherLoss(nn.Module):
 
         # Bond masking loss (pretraining only)
         if bond_predictions is not None and bond_targets is not None:
-            loss_bond = F.binary_cross_entropy(
-                bond_predictions.squeeze(),
-                bond_targets.float()
-            )
-            loss = loss_spectrum + self.lambda_bond * loss_bond
-            loss_dict['bond_loss'] = loss_bond.item()
+            # MSE loss for bond feature prediction (bond_type, conjugated, aromatic, in_ring)
+            if bond_predictions.numel() > 0 and bond_targets.numel() > 0:
+                loss_bond = F.mse_loss(bond_predictions, bond_targets)
+                loss = loss_spectrum + self.lambda_bond * loss_bond
+                loss_dict['bond_loss'] = loss_bond.item()
+            else:
+                # No masked bonds in this batch
+                loss = loss_spectrum
+                loss_dict['bond_loss'] = 0.0
         else:
             loss = loss_spectrum
 

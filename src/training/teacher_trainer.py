@@ -148,26 +148,32 @@ class TeacherTrainer:
             ecfp = batch['ecfp'].to(self.device)
 
             # Handle different phases
+            bond_predictions = None
+            bond_targets = None
+
             if self.phase == 'pretrain':
                 # Pretraining: Use dummy spectrum (all zeros) since we focus on bond masking
                 batch_size = ecfp.size(0)
                 target_spectrum = torch.zeros((batch_size, 501), device=self.device)
 
                 # Bond targets for pretraining
-                bond_targets = None
                 if 'mask_targets' in batch:
                     bond_targets = batch['mask_targets'].to(self.device)
             else:
                 # Finetuning: Use actual spectrum
                 target_spectrum = batch['spectrum'].to(self.device)
 
-            # Optional: Bond targets for pretraining
-            bond_predictions = None
-
             # Forward pass with mixed precision
             with autocast(enabled=self.use_amp):
-                # Model forward
-                predicted_spectrum = self.model(graph_data, ecfp, dropout=True)
+                # Model forward with bond predictions for pretraining
+                if self.phase == 'pretrain' and bond_targets is not None:
+                    model_output = self.model(graph_data, ecfp, dropout=True, return_bond_predictions=True)
+                    if isinstance(model_output, tuple):
+                        predicted_spectrum, bond_predictions = model_output
+                    else:
+                        predicted_spectrum = model_output
+                else:
+                    predicted_spectrum = self.model(graph_data, ecfp, dropout=True)
 
                 # Compute loss
                 loss, loss_dict = self.criterion(
