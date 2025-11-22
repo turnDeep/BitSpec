@@ -36,6 +36,8 @@ def download_pcqm4mv2(data_dir: str = "data/pcqm4mv2"):
     """
     try:
         from ogb.lsc import PCQM4Mv2Dataset
+        from ogb.utils import smiles2graph as original_smiles2graph
+        import ogb.utils.mol
 
         logger.info("=" * 80)
         logger.info("PCQM4Mv2 Dataset Download")
@@ -48,9 +50,46 @@ def download_pcqm4mv2(data_dir: str = "data/pcqm4mv2"):
         data_path = Path(data_dir)
         data_path.mkdir(parents=True, exist_ok=True)
 
+        # Patch smiles2graph to handle invalid SMILES gracefully
+        invalid_smiles_count = 0
+
+        def patched_smiles2graph(smiles_string):
+            """Patched version that handles invalid SMILES gracefully."""
+            nonlocal invalid_smiles_count
+            from rdkit import Chem
+
+            mol = Chem.MolFromSmiles(smiles_string)
+            if mol is None:
+                invalid_smiles_count += 1
+                if invalid_smiles_count <= 10:  # Log first 10 invalid SMILES
+                    logger.warning(f"Invalid SMILES (#{invalid_smiles_count}): {smiles_string[:50]}...")
+                elif invalid_smiles_count == 11:
+                    logger.warning("(Suppressing further invalid SMILES warnings...)")
+
+                # Return a minimal valid graph structure
+                return {
+                    'edge_index': [[], []],
+                    'edge_feat': [],
+                    'node_feat': [[0] * 9],  # Single dummy atom with 9 features
+                    'num_nodes': 1
+                }
+
+            # Call original function
+            return original_smiles2graph(smiles_string)
+
+        # Apply the patch
+        ogb.utils.mol.smiles2graph = patched_smiles2graph
+
         # Download dataset
         logger.info("Downloading PCQM4Mv2 dataset...")
+        logger.info("Note: Invalid SMILES will be replaced with dummy graphs")
         dataset = PCQM4Mv2Dataset(root=str(data_path), only_smiles=False)
+
+        # Restore original function
+        ogb.utils.mol.smiles2graph = original_smiles2graph
+
+        if invalid_smiles_count > 0:
+            logger.warning(f"⚠️  Found {invalid_smiles_count:,} invalid SMILES (replaced with dummy graphs)")
 
         logger.info("=" * 80)
         logger.info(f"✅ Download complete!")
