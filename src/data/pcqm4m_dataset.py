@@ -27,56 +27,19 @@ def download_pcqm4mv2(data_dir: str):
     Download PCQM4Mv2 dataset from OGB
 
     The dataset will be automatically downloaded using ogb library.
-    Handles invalid SMILES gracefully by replacing them with dummy graphs.
+    Uses only_smiles=True to avoid graph conversion errors with invalid SMILES.
+    Graph conversion is handled separately with proper error handling.
     """
     try:
         from ogb.lsc import PCQM4Mv2Dataset as OGB_PCQM4Mv2
-        from ogb.utils import smiles2graph as original_smiles2graph
-        import ogb.utils.mol
 
         logger.info(f"Downloading PCQM4Mv2 to {data_dir}...")
+        logger.info("Note: Downloading SMILES only, graph conversion will be done separately")
 
-        # Patch smiles2graph to handle invalid SMILES gracefully
-        invalid_smiles_count = 0
+        # Download with only_smiles=True to avoid conversion errors
+        dataset = OGB_PCQM4Mv2(root=data_dir, only_smiles=True)
 
-        def patched_smiles2graph(smiles_string):
-            """Patched version that handles invalid SMILES gracefully."""
-            nonlocal invalid_smiles_count
-            from rdkit import Chem
-
-            mol = Chem.MolFromSmiles(smiles_string)
-            if mol is None:
-                invalid_smiles_count += 1
-                if invalid_smiles_count <= 10:  # Log first 10 invalid SMILES
-                    logger.warning(f"Invalid SMILES (#{invalid_smiles_count}): {smiles_string[:50]}...")
-                elif invalid_smiles_count == 11:
-                    logger.warning("(Suppressing further invalid SMILES warnings...)")
-
-                # Return a minimal valid graph structure
-                return {
-                    'edge_index': [[], []],
-                    'edge_feat': [],
-                    'node_feat': [[0] * 9],  # Single dummy atom with 9 features
-                    'num_nodes': 1
-                }
-
-            # Call original function
-            return original_smiles2graph(smiles_string)
-
-        # Apply the patch
-        ogb.utils.mol.smiles2graph = patched_smiles2graph
-
-        # Download dataset
-        logger.info("Note: Invalid SMILES will be replaced with dummy graphs")
-        dataset = OGB_PCQM4Mv2(root=data_dir, only_smiles=False)
-
-        # Restore original function
-        ogb.utils.mol.smiles2graph = original_smiles2graph
-
-        if invalid_smiles_count > 0:
-            logger.warning(f"⚠️  Found {invalid_smiles_count:,} invalid SMILES (replaced with dummy graphs)")
-
-        logger.info(f"PCQM4Mv2 downloaded: {len(dataset)} molecules")
+        logger.info(f"PCQM4Mv2 downloaded: {len(dataset)} SMILES strings")
         return dataset
 
     except ImportError:
