@@ -34,8 +34,11 @@ ENV/
 
 # Data files (keep structure but ignore large files)
 *.msp
+*.MSP
 *.mol
+*.MOL
 *.sdf
+*.SDF
 data/processed/*.pkl
 data/processed/*.h5
 data/processed/*.hdf5

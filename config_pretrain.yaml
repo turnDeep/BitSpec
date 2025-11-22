@@ -15,7 +15,7 @@ data:
   auto_download: true           # 自動ダウンロード
 
   # NIST EI-MSデータ（ファインチューニング用）
-  nist_msp_path: "data/NIST17.msp"
+  nist_msp_path: "data/NIST17.MSP"
   mol_files_dir: "data/mol_files"
 
   # 処理済みデータ

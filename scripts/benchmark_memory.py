@@ -137,7 +137,7 @@ def benchmark_dataset_loading(dataset_size: int = 100000):
     print("=" * 80)
 
     # Check if data exists
-    msp_file = "data/NIST17.msp"
+    msp_file = "data/NIST17.MSP"
     if not os.path.exists(msp_file):
         print(f"❌ Data not found: {msp_file}")
         print("   Please download NIST17 dataset first")

@@ -338,7 +338,7 @@ if __name__ == "__main__":
 
     # Example: Create lazy dataset
     # dataset = LazyMassSpecDataset(
-    #     msp_file="data/NIST17.msp",
+    #     msp_file="data/NIST17.MSP",
     #     mol_files_dir="data/mol_files",
     #     max_mz=500,
     #     cache_dir="data/processed/lazy_cache",

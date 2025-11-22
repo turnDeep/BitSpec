@@ -4,7 +4,7 @@
 NEIMS v2.0 NIST EI-MS Dataset Loader
 
 Loads NIST EI-MS data from:
-1. NIST17.msp file (if available)
+1. NIST17.MSP file (if available)
 2. MOL files + separate spectrum data
 
 Supports Teacher (GNN+ECFP) and Student (ECFP only) modes.
@@ -317,7 +317,7 @@ class NISTDataset(Dataset):
         data = []
 
         # Try MSP file first
-        msp_path = self.data_config.get('nist_msp_path', 'data/NIST17.msp')
+        msp_path = self.data_config.get('nist_msp_path', 'data/NIST17.MSP')
         if os.path.exists(msp_path):
             logger.info(f"Parsing MSP file: {msp_path}")
             entries = parse_msp_file(msp_path)
@@ -409,7 +409,7 @@ class NISTDataset(Dataset):
         metadata = []
 
         # Try MSP file first
-        msp_path = self.data_config.get('nist_msp_path', 'data/NIST17.msp')
+        msp_path = self.data_config.get('nist_msp_path', 'data/NIST17.MSP')
 
         # Temporary data storage for HDF5
         all_smiles = []
