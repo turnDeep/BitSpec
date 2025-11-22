@@ -215,6 +215,11 @@ class TeacherTrainer:
                         predicted_spectrum, bond_predictions = model_output
                     else:
                         predicted_spectrum = model_output
+                        bond_predictions = None
+
+                    # Filter bond_targets to match bond_predictions after DropEdge
+                    if bond_predictions is not None and hasattr(graph_data, 'valid_bond_mask'):
+                        bond_targets = bond_targets[graph_data.valid_bond_mask]
                 else:
                     predicted_spectrum = self.model(graph_data, ecfp, dropout=True)
 

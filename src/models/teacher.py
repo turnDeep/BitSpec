@@ -129,16 +129,21 @@ class GNNBranch(nn.Module):
             node_features: [N, hidden_dim] (optional, only if return_node_features=True)
             edge_index_processed: [2, E'] (optional, only if return_node_features=True, E' after DropEdge)
             edge_attr_emb: [E', edge_dim] (optional, only if return_node_features=True)
+            edge_mask: [E] boolean mask (optional, only if return_node_features=True, shows which edges were kept)
         """
         # Embed inputs
         x = self.node_embedding(x)
         edge_attr_emb = self.edge_embedding(edge_attr)
 
         # Apply DropEdge if training
+        edge_mask = None
         if dropout and self.training:
             edge_mask = torch.rand(edge_index.size(1), device=edge_index.device) > self.drop_edge
             edge_index = edge_index[:, edge_mask]
             edge_attr_emb = edge_attr_emb[edge_mask]
+        else:
+            # No DropEdge applied, all edges are kept
+            edge_mask = torch.ones(edge_index.size(1), dtype=torch.bool, device=edge_index.device)
 
         # GNN layers
         for i in range(self.num_layers):
@@ -164,7 +169,7 @@ class GNNBranch(nn.Module):
         graph_embedding = torch.cat([mean_pool, max_pool, attention_pool], dim=-1)  # [batch_size, 768]
 
         if return_node_features:
-            return graph_embedding, x, edge_index, edge_attr_emb
+            return graph_embedding, x, edge_index, edge_attr_emb, edge_mask
         return graph_embedding
 
 
@@ -297,7 +302,7 @@ class TeacherModel(nn.Module):
         """
         # GNN Branch
         if return_bond_predictions and self.use_bond_breaking:
-            gnn_emb, node_features, edge_index_processed, edge_attr_emb = self.gnn_branch(
+            gnn_emb, node_features, edge_index_processed, edge_attr_emb, edge_mask = self.gnn_branch(
                 graph_data.x,
                 graph_data.edge_index,
                 graph_data.edge_attr,
@@ -334,11 +339,30 @@ class TeacherModel(nn.Module):
             )  # [E', 1] - breaking probabilities (E' after DropEdge)
 
             # Predict bond features (type, conjugated, aromatic, in_ring)
-            bond_predictions = self.bond_feature_head(bond_probs)  # [E, 4]
+            bond_predictions = self.bond_feature_head(bond_probs)  # [E', 4]
 
             # Filter to only masked bonds if mask_indices available
+            # Also return a mask indicating which original mask_indices survived DropEdge
+            valid_bond_mask = None
             if hasattr(graph_data, 'mask_indices') and graph_data.mask_indices.numel() > 0:
-                bond_predictions = bond_predictions[graph_data.mask_indices]
+                # Adjust mask_indices based on edge_mask (DropEdge)
+                # Create mapping from old indices to new indices
+                old_to_new_idx = torch.cumsum(edge_mask, dim=0) - 1
+
+                # Filter mask_indices: keep only those that were not dropped
+                valid_bond_mask = edge_mask[graph_data.mask_indices]
+                adjusted_mask_indices = old_to_new_idx[graph_data.mask_indices[valid_bond_mask]]
+
+                # Only select bond predictions for valid masked bonds
+                if adjusted_mask_indices.numel() > 0:
+                    bond_predictions = bond_predictions[adjusted_mask_indices]
+                else:
+                    # No masked bonds survived DropEdge
+                    bond_predictions = torch.zeros((0, 4), device=bond_predictions.device)
+
+            # Store valid_bond_mask in graph_data for trainer to use
+            if valid_bond_mask is not None:
+                graph_data.valid_bond_mask = valid_bond_mask
 
             return spectrum, bond_predictions
 
