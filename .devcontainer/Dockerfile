@@ -105,14 +105,18 @@ RUN pip install --no-cache-dir \
 # ===================================================
 RUN pip install --no-cache-dir torch-geometric
 
-# torch_scatterなど拡張ライブラリをソースからビルド
-# --no-build-isolationでPyTorchを参照可能にする
+# torch_scatterなど拡張ライブラリをCUDA対応でインストール
+# ビルド済みホイールが見つからない場合は、ソースからCUDA対応ビルド
 RUN TORCH_VERSION=$(python -c "import torch; print(torch.__version__.split('+')[0])") && \
     CUDA_VERSION=$(python -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
     echo "Installing PyG extensions for PyTorch ${TORCH_VERSION} with ${CUDA_VERSION}" && \
-    pip install --no-cache-dir --no-build-isolation \
+    (pip install --no-cache-dir --no-build-isolation \
     torch-scatter torch-sparse torch-cluster torch-spline-conv \
-    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html
+    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html || \
+    (echo "⚠️  Pre-built wheels not found, building from source with CUDA support..." && \
+     TORCH_CUDA_ARCH_LIST="9.0;12.0" FORCE_CUDA=1 \
+     pip install --no-cache-dir --no-build-isolation \
+     torch-scatter torch-sparse torch-cluster torch-spline-conv))
 
 # 追加の機械学習ツール
 RUN pip install --no-cache-dir \
