@@ -110,13 +110,19 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir torch-geometric
 
 # torch_scatterなど拡張ライブラリをソースからビルド
-# --no-build-isolationでPyTorchを参照可能にする
-RUN TORCH_VERSION=$(python -c "import torch; print(torch.__version__.split('+')[0])") && \
+# sm_120 (RTX 5070 Ti) 対応のため、環境変数を設定してソースからビルド
+RUN export FORCE_CUDA=1 && \
+    export TORCH_CUDA_ARCH_LIST="9.0;12.0" && \
+    TORCH_VERSION=$(python -c "import torch; print(torch.__version__.split('+')[0])") && \
     CUDA_VERSION=$(python -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
     echo "Installing PyG extensions for PyTorch ${TORCH_VERSION} with ${CUDA_VERSION}" && \
-    pip install --no-cache-dir --no-build-isolation \
-    torch-scatter torch-sparse torch-cluster torch-spline-conv \
-    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html
+    echo "Attempting to install from prebuilt wheels first..." && \
+    (pip install --no-cache-dir --no-build-isolation \
+        torch-scatter torch-sparse torch-cluster torch-spline-conv \
+        -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html || \
+    (echo "Prebuilt wheels not available, building from source..." && \
+     pip install --no-cache-dir --no-build-isolation --verbose \
+        torch-scatter torch-sparse torch-cluster torch-spline-conv))
 
 # 追加の機械学習ツール
 RUN pip install --no-cache-dir \
