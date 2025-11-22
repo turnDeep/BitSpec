@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GINEConv, global_add_pool, global_mean_pool, global_max_pool
 from torch_geometric.nn import PairNorm
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdFingerprintGenerator
 import numpy as np
 from typing import Tuple, Optional
 
@@ -402,5 +402,6 @@ def compute_ecfp4(smiles: str, fingerprint_size: int = 4096) -> np.ndarray:
     if mol is None:
         return np.zeros(fingerprint_size)
 
-    fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=fingerprint_size)
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=fingerprint_size)
+    fp = mfpgen.GetFingerprint(mol)
     return np.array(fp)

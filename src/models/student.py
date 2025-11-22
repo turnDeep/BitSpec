@@ -312,14 +312,15 @@ def compute_count_fingerprint(smiles: str, fingerprint_size: int = 2048) -> np.n
         count_fp: Count fingerprint array
     """
     from rdkit import Chem
-    from rdkit.Chem import AllChem
+    from rdkit.Chem import rdFingerprintGenerator
 
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return np.zeros(fingerprint_size)
 
     # Morgan fingerprint with counts
-    fp = AllChem.GetHashedMorganFingerprint(mol, 2, nBits=fingerprint_size)
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=fingerprint_size)
+    fp = mfpgen.GetCountFingerprint(mol)
 
     # Convert to numpy array
     count_fp = np.zeros(fingerprint_size)
