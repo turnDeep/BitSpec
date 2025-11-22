@@ -126,8 +126,14 @@ def mol_to_graph_with_mask(
         edge_attr.append(edge_features)
         edge_attr.append(edge_features)  # Same features for reverse edge
 
-    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-    edge_attr = torch.tensor(edge_attr, dtype=torch.float)
+    # Convert to tensors with proper shape handling for empty graphs
+    if edge_index:
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        edge_attr = torch.tensor(edge_attr, dtype=torch.float)
+    else:
+        # No edges: create empty tensors with correct shape
+        edge_index = torch.zeros((2, 0), dtype=torch.long)
+        edge_attr = torch.zeros((0, 6), dtype=torch.float)
 
     # Mask targets
     if mask_targets:
@@ -337,7 +343,9 @@ def collate_fn_pretrain(batch: List[Dict]) -> Dict:
             mask_indices_list.append(adjusted_indices)
             mask_targets_list.append(graph.mask_targets)
 
-        edge_offset += graph.edge_index.size(1)
+        # Safely get number of edges, handling both normal and empty graphs
+        num_edges = graph.edge_index.size(1) if graph.edge_index.dim() == 2 else 0
+        edge_offset += num_edges
 
     if mask_indices_list:
         mask_indices = torch.cat(mask_indices_list, dim=0)
