@@ -64,6 +64,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 # ===================================================
 # RTX 50シリーズ対応: PyTorch Nightly (cu128) インストール
 # ===================================================
+# nvidia-nvshmem-cu12を先にインストールして依存関係の競合を回避
+RUN pip install --no-cache-dir nvidia-nvshmem-cu12==3.4.5
+
+# PyTorch nightlyをインストール
 RUN pip install --no-cache-dir --pre \
     torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/nightly/cu128
