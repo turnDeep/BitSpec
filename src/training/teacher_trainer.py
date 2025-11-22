@@ -44,9 +44,9 @@ class TeacherTrainer:
 
         # Get phase-specific config
         if phase == 'pretrain':
-            self.train_config = config['pretraining']
+            self.train_config = config['training']['teacher_pretrain']
         else:  # finetune
-            self.train_config = config['finetuning']
+            self.train_config = config['training']['teacher_finetune']
 
         # Loss function
         lambda_bond = self.train_config.get('bond_masking', {}).get('lambda_bond', 0.1) \
