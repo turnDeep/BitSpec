@@ -72,6 +72,9 @@ pip install --extra-index-url https://download.pytorch.org/whl/cu128 torch>=2.7.
 # 依存関係のインストール
 pip install -r requirements.txt
 
+# OGB (Open Graph Benchmark) ライブラリ（PCQM4Mv2データセット用）
+pip install ogb>=1.3.6
+
 # パッケージのインストール
 pip install -e .
 ```
@@ -131,6 +134,7 @@ BitSpec/
     ├── train_teacher.py          # Teacher学習（Phase 1-2）
     ├── train_student.py          # Student蒸留（Phase 3）
     ├── train_pipeline.py         # 統合パイプライン ★推奨★
+    ├── download_pcqm4mv2.py      # PCQM4Mv2データセットダウンロード
     ├── evaluate.py               # 評価スクリプト
     ├── predict.py                # 推論スクリプト
     └── benchmark_memory.py       # 🆕 メモリ使用量推定・ベンチマークツール
@@ -154,6 +158,8 @@ Phase 3: Student知識蒸留 (Teacherから学習)
 
 ### 1. データの準備
 
+#### NIST EI-MSデータ
+
 プロジェクトルートに以下のデータを配置:
 
 ```
@@ -164,10 +170,34 @@ BitSpec/
 │   │   ├── ID200001.MOL
 │   │   ├── ID200002.MOL
 │   │   └── ...
-│   └── pcqm4mv2/           # 自動ダウンロードされます
+│   └── pcqm4mv2/           # PCQM4Mv2データセット（後述）
 ```
 
-**PCQM4Mv2データセット**は初回実行時に自動ダウンロードされます（約3.74M分子、~20GB）。
+#### PCQM4Mv2データセット（事前学習用）
+
+**PCQM4Mv2データセット**（約3.74M分子、~8GB）のダウンロードには以下の手順が必要です：
+
+**1. OGBライブラリのインストール**
+
+```bash
+# OGB (Open Graph Benchmark) ライブラリをインストール
+pip install ogb>=1.3.6
+
+# インストール確認
+python -c "import ogb; print(f'OGB version: {ogb.__version__}')"
+```
+
+**2. データセットのダウンロード**
+
+```bash
+# PCQM4Mv2データセットをダウンロード（初回実行時、数時間かかる場合があります）
+python scripts/download_pcqm4mv2.py --data-dir data/pcqm4mv2
+```
+
+ダウンロードには数時間かかる場合があります（データサイズ: ~8GB）。
+
+**注意**: トレーニングパイプライン実行時に自動ダウンロードも可能ですが、
+事前に手動でダウンロードすることを推奨します。
 
 ### 2. 統合パイプラインの実行（推奨）
 
@@ -178,7 +208,8 @@ python scripts/train_pipeline.py --config config.yaml
 ```
 
 このコマンドは以下を自動的に実行します:
-1. **Phase 1**: PCQM4Mv2データセットのダウンロードとTeacher事前学習（Bond Masking）
+1. **Phase 1**: PCQM4Mv2データセット使用とTeacher事前学習（Bond Masking）
+   - PCQM4Mv2が未ダウンロードの場合は自動ダウンロード（~8GB、数時間）
 2. **Phase 2**: NIST EI-MSデータでTeacherをファインチューニング（MC Dropout使用）
 3. **Phase 3**: TeacherからStudentへの知識蒸留（Uncertainty-Aware KD）
 

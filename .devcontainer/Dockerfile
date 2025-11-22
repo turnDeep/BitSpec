@@ -119,6 +119,9 @@ RUN export FORCE_CUDA=1 && \
     pip install --no-cache-dir --no-build-isolation torch-scatter && \
     pip install --no-cache-dir --no-build-isolation torch-sparse torch-cluster torch-spline-conv
 
+# Open Graph Benchmark (OGB) for PCQM4Mv2 dataset
+RUN pip install --no-cache-dir ogb>=1.3.6
+
 # 追加の機械学習ツール
 RUN pip install --no-cache-dir \
     tensorboard \
