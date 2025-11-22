@@ -19,6 +19,10 @@ from rdkit.Chem import AllChem, rdFingerprintGenerator
 from torch_geometric.data import Data
 import logging
 
+# RDKit警告の抑制（無効な原子価警告など）
+from rdkit import RDLogger
+RDLogger.DisableLog('rdApp.*')
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +50,53 @@ def download_pcqm4mv2(data_dir: str):
         logger.error("OGB library not installed. Install with: pip install ogb")
         logger.info("Falling back to manual download...")
         return None
+
+
+def is_valid_mol(mol: Chem.Mol) -> bool:
+    """
+    Check if molecule is chemically valid
+
+    Filters out molecules with:
+    - Invalid valence states
+    - Unusual atomic numbers
+    - No atoms or bonds
+
+    Args:
+        mol: RDKit molecule
+
+    Returns:
+        valid: True if molecule is valid
+    """
+    if mol is None:
+        return False
+
+    # Check if molecule has atoms and bonds
+    if mol.GetNumAtoms() == 0:
+        return False
+
+    # Check for unusual or invalid atoms
+    for atom in mol.GetAtoms():
+        atomic_num = atom.GetAtomicNum()
+
+        # Only allow common organic elements (H, C, N, O, F, P, S, Cl, Br, I)
+        # and some metals commonly found in organometallics
+        allowed_atoms = {1, 6, 7, 8, 9, 14, 15, 16, 17, 35, 53}  # Si added for PCQM4Mv2
+        if atomic_num not in allowed_atoms:
+            return False
+
+        # Check valence using RDKit's sanitization
+        try:
+            # Try to get implicit valence - this will fail for invalid structures
+            atom.GetImplicitValence()
+        except:
+            return False
+
+    # Try to sanitize molecule to catch other issues
+    try:
+        Chem.SanitizeMol(mol, catchErrors=True)
+        return True
+    except:
+        return False
 
 
 def mol_to_graph_with_mask(
@@ -236,8 +287,10 @@ class PCQM4Mv2Dataset(Dataset):
         ogb_dataset,
         data_dir: Path
     ) -> Tuple[List[str], List[int]]:
-        """Process OGB dataset"""
+        """Process OGB dataset with validation and filtering"""
         smiles_list = []
+        valid_count = 0
+        invalid_count = 0
 
         if ogb_dataset is not None:
             # Use OGB dataset
@@ -252,9 +305,21 @@ class PCQM4Mv2Dataset(Dataset):
             smiles_file = data_dir / 'pcqm4m-v2' / 'raw' / 'data.csv.gz'
             if smiles_file.exists():
                 import pandas as pd
+                logger.info(f"Loading SMILES from {smiles_file}...")
                 df = pd.read_csv(smiles_file, compression='gzip')
-                smiles_list = df['smiles'].tolist()
-                logger.info(f"Loaded {len(smiles_list)} SMILES from OGB")
+                all_smiles = df['smiles'].tolist()
+
+                # Filter valid molecules
+                logger.info(f"Validating {len(all_smiles)} molecules...")
+                for smi in all_smiles:
+                    mol = Chem.MolFromSmiles(smi)
+                    if is_valid_mol(mol):
+                        smiles_list.append(smi)
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+
+                logger.info(f"Validation complete: {valid_count} valid, {invalid_count} invalid")
 
         else:
             # Fallback: Load from custom SMILES file
@@ -262,7 +327,18 @@ class PCQM4Mv2Dataset(Dataset):
             if smiles_file.exists():
                 logger.info(f"Loading SMILES from {smiles_file}")
                 with open(smiles_file, 'r') as f:
-                    smiles_list = [line.strip() for line in f if line.strip()]
+                    all_smiles = [line.strip() for line in f if line.strip()]
+
+                # Filter valid molecules
+                for smi in all_smiles:
+                    mol = Chem.MolFromSmiles(smi)
+                    if is_valid_mol(mol):
+                        smiles_list.append(smi)
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+
+                logger.info(f"Validation complete: {valid_count} valid, {invalid_count} invalid")
             else:
                 logger.warning("No PCQM4Mv2 data found. Creating dummy dataset.")
                 # Create small dummy dataset for testing
@@ -270,18 +346,24 @@ class PCQM4Mv2Dataset(Dataset):
                     'CCO',  # Ethanol
                     'CC(C)O',  # Isopropanol
                     'c1ccccc1',  # Benzene
-                ] * 100
+                    'CC(=O)O',  # Acetic acid
+                    'CC(C)C',  # Isobutane
+                ] * 1000  # Increased for better validation
 
-        # Split data (train: 90%, val: 10%)
+        # Split data with minimum validation size
         np.random.seed(42)
         indices = np.random.permutation(len(smiles_list))
 
-        split_idx = int(len(indices) * 0.9)
+        # Ensure validation set has at least 5000 samples or 10% (whichever is larger)
+        min_val_size = min(5000, int(len(indices) * 0.1))
+        split_idx = len(indices) - min_val_size
 
         if self.split == 'train':
             split_indices = indices[:split_idx].tolist()
         else:  # val
             split_indices = indices[split_idx:].tolist()
+
+        logger.info(f"Split sizes - Train: {len(indices[:split_idx])}, Val: {len(indices[split_idx:])}")
 
         return smiles_list, split_indices
 
@@ -302,8 +384,10 @@ class PCQM4Mv2Dataset(Dataset):
         smiles = self.smiles_list[real_idx]
 
         mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            # Fallback to simple molecule
+
+        # Validate and fallback if needed
+        if not is_valid_mol(mol):
+            logger.warning(f"Invalid molecule at index {idx}: {smiles}, using fallback")
             mol = Chem.MolFromSmiles('CCO')
 
         # Generate graph with masking
