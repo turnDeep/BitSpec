@@ -10,7 +10,7 @@ Implements uncertainty-aware KD with GradNorm adaptive weighting.
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 import logging
 from pathlib import Path
@@ -89,7 +89,7 @@ class StudentTrainer:
 
         # Mixed precision
         self.use_amp = self.train_config.get('use_amp', True)
-        self.scaler = GradScaler() if self.use_amp else None
+        self.scaler = GradScaler('cuda') if self.use_amp else None
 
         # Gradient clipping
         self.gradient_clip = self.train_config.get('gradient_clip', 0.5)
@@ -201,7 +201,7 @@ class StudentTrainer:
                     )
 
             # Student forward pass
-            with autocast(enabled=self.use_amp):
+            with autocast('cuda', enabled=self.use_amp):
                 # Student prediction
                 student_output, expert_weights, expert_indices = self.student(
                     ecfp_count_fp
@@ -422,7 +422,7 @@ class StudentTrainer:
             ecfp_count_fp = batch['ecfp_count_fp'].to(self.device)
             nist_spectrum = batch['spectrum'].to(self.device)
 
-            with autocast(enabled=self.use_amp):
+            with autocast('cuda', enabled=self.use_amp):
                 student_output, expert_weights, expert_indices = self.student(
                     ecfp_count_fp
                 )
