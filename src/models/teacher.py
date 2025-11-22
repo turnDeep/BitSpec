@@ -127,7 +127,8 @@ class GNNBranch(nn.Module):
         Returns:
             graph_embedding: [batch_size, 768] (mean + max + attention pooling)
             node_features: [N, hidden_dim] (optional, only if return_node_features=True)
-            edge_attr_emb: [E, edge_dim] (optional, only if return_node_features=True)
+            edge_index_processed: [2, E'] (optional, only if return_node_features=True, E' after DropEdge)
+            edge_attr_emb: [E', edge_dim] (optional, only if return_node_features=True)
         """
         # Embed inputs
         x = self.node_embedding(x)
@@ -163,7 +164,7 @@ class GNNBranch(nn.Module):
         graph_embedding = torch.cat([mean_pool, max_pool, attention_pool], dim=-1)  # [batch_size, 768]
 
         if return_node_features:
-            return graph_embedding, x, edge_attr_emb
+            return graph_embedding, x, edge_index, edge_attr_emb
         return graph_embedding
 
 
@@ -296,7 +297,7 @@ class TeacherModel(nn.Module):
         """
         # GNN Branch
         if return_bond_predictions and self.use_bond_breaking:
-            gnn_emb, node_features, edge_attr_emb = self.gnn_branch(
+            gnn_emb, node_features, edge_index_processed, edge_attr_emb = self.gnn_branch(
                 graph_data.x,
                 graph_data.edge_index,
                 graph_data.edge_attr,
@@ -325,11 +326,12 @@ class TeacherModel(nn.Module):
         # Bond masking predictions (for pretraining)
         if return_bond_predictions and self.use_bond_breaking:
             # Use BondBreakingAttention to predict bond breaking probabilities
+            # Use the processed edge_index (after DropEdge) to match edge_attr_emb size
             bond_probs = self.bond_breaking(
                 node_features,
-                graph_data.edge_index,
+                edge_index_processed,
                 edge_attr_emb
-            )  # [E, 1] - breaking probabilities
+            )  # [E', 1] - breaking probabilities (E' after DropEdge)
 
             # Predict bond features (type, conjugated, aromatic, in_ring)
             bond_predictions = self.bond_feature_head(bond_probs)  # [E, 4]
