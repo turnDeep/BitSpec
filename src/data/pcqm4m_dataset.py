@@ -339,6 +339,9 @@ def collate_fn_pretrain(batch: List[Dict]) -> Dict:
         mask_indices = torch.zeros(0, dtype=torch.long)
         mask_targets = torch.zeros((0, 4), dtype=torch.float)
 
+    # Add mask_indices to graph_batch for easy access in model forward
+    graph_batch.mask_indices = mask_indices
+
     return {
         'graph': graph_batch,
         'ecfp': ecfps,

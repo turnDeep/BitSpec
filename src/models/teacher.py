@@ -114,7 +114,7 @@ class GNNBranch(nn.Module):
             nn.Linear(hidden_dim // 2, 1)
         )
 
-    def forward(self, x, edge_index, edge_attr, batch, dropout=False):
+    def forward(self, x, edge_index, edge_attr, batch, dropout=False, return_node_features=False):
         """
         Args:
             x: Node features [N, node_features]
@@ -122,9 +122,12 @@ class GNNBranch(nn.Module):
             edge_attr: Edge features [E, edge_features]
             batch: Batch vector [N]
             dropout: Whether to apply dropout (for MC Dropout)
+            return_node_features: Whether to return node features for bond prediction
 
         Returns:
             graph_embedding: [batch_size, 768] (mean + max + attention pooling)
+            node_features: [N, hidden_dim] (optional, only if return_node_features=True)
+            edge_attr_emb: [E, edge_dim] (optional, only if return_node_features=True)
         """
         # Embed inputs
         x = self.node_embedding(x)
@@ -159,6 +162,8 @@ class GNNBranch(nn.Module):
         # Concatenate all pooling methods
         graph_embedding = torch.cat([mean_pool, max_pool, attention_pool], dim=-1)  # [batch_size, 768]
 
+        if return_node_features:
+            return graph_embedding, x, edge_attr_emb
         return graph_embedding
 
 
@@ -230,6 +235,13 @@ class TeacherModel(nn.Module):
                 node_dim=gnn_cfg['hidden_dim'],
                 edge_dim=gnn_cfg['edge_dim']
             )
+            # Bond feature prediction head for pretraining
+            # Predicts: bond_type, is_conjugated, is_aromatic, is_in_ring
+            self.bond_feature_head = nn.Sequential(
+                nn.Linear(1, 16),
+                nn.ReLU(),
+                nn.Linear(16, 4)
+            )
 
         # ECFP Branch
         self.ecfp_branch = ECFPBranch(
@@ -268,7 +280,7 @@ class TeacherModel(nn.Module):
         self.mc_samples = mc_cfg['n_samples']
         self.mc_dropout_rate = mc_cfg['dropout_rate']
 
-    def forward(self, graph_data, ecfp, dropout=False):
+    def forward(self, graph_data, ecfp, dropout=False, return_bond_predictions=False):
         """
         Forward pass
 
@@ -276,18 +288,30 @@ class TeacherModel(nn.Module):
             graph_data: PyG Data object with x, edge_index, edge_attr, batch
             ecfp: ECFP4 fingerprint [batch_size, 4096]
             dropout: Whether to apply dropout (for MC Dropout)
+            return_bond_predictions: Whether to return bond predictions (for pretraining)
 
         Returns:
             spectrum: Predicted spectrum [batch_size, output_dim]
+            bond_predictions: Bond masking predictions [num_masked_bonds, 4] (optional)
         """
         # GNN Branch
-        gnn_emb = self.gnn_branch(
-            graph_data.x,
-            graph_data.edge_index,
-            graph_data.edge_attr,
-            graph_data.batch,
-            dropout=dropout
-        )  # [batch_size, 768]
+        if return_bond_predictions and self.use_bond_breaking:
+            gnn_emb, node_features, edge_attr_emb = self.gnn_branch(
+                graph_data.x,
+                graph_data.edge_index,
+                graph_data.edge_attr,
+                graph_data.batch,
+                dropout=dropout,
+                return_node_features=True
+            )
+        else:
+            gnn_emb = self.gnn_branch(
+                graph_data.x,
+                graph_data.edge_index,
+                graph_data.edge_attr,
+                graph_data.batch,
+                dropout=dropout
+            )  # [batch_size, 768]
 
         # ECFP Branch
         ecfp_emb = self.ecfp_branch(ecfp)  # [batch_size, 512]
@@ -297,6 +321,24 @@ class TeacherModel(nn.Module):
 
         # Prediction
         spectrum = self.prediction_head(fused)  # [batch_size, output_dim]
+
+        # Bond masking predictions (for pretraining)
+        if return_bond_predictions and self.use_bond_breaking:
+            # Use BondBreakingAttention to predict bond breaking probabilities
+            bond_probs = self.bond_breaking(
+                node_features,
+                graph_data.edge_index,
+                edge_attr_emb
+            )  # [E, 1] - breaking probabilities
+
+            # Predict bond features (type, conjugated, aromatic, in_ring)
+            bond_predictions = self.bond_feature_head(bond_probs)  # [E, 4]
+
+            # Filter to only masked bonds if mask_indices available
+            if hasattr(graph_data, 'mask_indices') and graph_data.mask_indices.numel() > 0:
+                bond_predictions = bond_predictions[graph_data.mask_indices]
+
+            return spectrum, bond_predictions
 
         return spectrum
 
