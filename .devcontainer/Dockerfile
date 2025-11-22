@@ -110,13 +110,12 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir torch-geometric
 
 # torch_scatterなど拡張ライブラリをソースからビルド
-# --no-build-isolationでPyTorchを参照可能にする
-RUN TORCH_VERSION=$(python -c "import torch; print(torch.__version__.split('+')[0])") && \
-    CUDA_VERSION=$(python -c "import torch; print('cu' + torch.version.cuda.replace('.', ''))") && \
-    echo "Installing PyG extensions for PyTorch ${TORCH_VERSION} with ${CUDA_VERSION}" && \
-    pip install --no-cache-dir --no-build-isolation \
-    torch-scatter torch-sparse torch-cluster torch-spline-conv \
-    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+${CUDA_VERSION}.html
+# PyTorch nightlyを使用しているため、プリビルドホイールは利用できない
+# ソースからコンパイルしてCUDA対応版をインストール
+RUN pip install --no-cache-dir git+https://github.com/rusty1s/pytorch_scatter.git
+RUN pip install --no-cache-dir git+https://github.com/rusty1s/pytorch_sparse.git
+RUN pip install --no-cache-dir git+https://github.com/rusty1s/pytorch_cluster.git
+RUN pip install --no-cache-dir git+https://github.com/rusty1s/pytorch_spline_conv.git
 
 # 追加の機械学習ツール
 RUN pip install --no-cache-dir \
