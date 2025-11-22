@@ -19,6 +19,20 @@ import numpy as np
 
 from src.training.losses import TeacherLoss
 from src.training.schedulers import WarmupCosineScheduler
+from src.training.early_stopping import EarlyStopping
+
+# Optional logging imports
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    TENSORBOARD_AVAILABLE = True
+except ImportError:
+    TENSORBOARD_AVAILABLE = False
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 
 class TeacherTrainer:
@@ -72,6 +86,35 @@ class TeacherTrainer:
         # Best model tracking
         self.best_val_loss = float('inf')
         self.best_epoch = 0
+
+        # Early stopping
+        early_stop_config = self.train_config.get('early_stopping', {})
+        if early_stop_config:
+            self.early_stopping = EarlyStopping(
+                patience=early_stop_config.get('patience', 20),
+                min_delta=early_stop_config.get('min_delta', 0.0001),
+                mode='min'
+            )
+        else:
+            self.early_stopping = None
+
+        # Logging setup
+        logging_config = config.get('logging', {})
+        self.use_tensorboard = logging_config.get('use_tensorboard', False) and TENSORBOARD_AVAILABLE
+        self.use_wandb = logging_config.get('use_wandb', False) and WANDB_AVAILABLE
+        self.writer = None
+
+        if self.use_tensorboard:
+            log_dir = Path(logging_config.get('log_dir', 'logs/neims_v2_teacher'))
+            log_dir = log_dir / phase
+            log_dir.mkdir(parents=True, exist_ok=True)
+            self.writer = SummaryWriter(log_dir=str(log_dir))
+            self.logger.info(f"TensorBoard logging enabled: {log_dir}")
+
+        if self.use_wandb:
+            # WandB will be initialized in train() method
+            self.wandb_project = logging_config.get('wandb_project', 'neims-v2')
+            self.logger.info(f"WandB logging enabled: project={self.wandb_project}")
 
     def _setup_optimizer(self):
         """Setup optimizer"""
@@ -317,6 +360,14 @@ class TeacherTrainer:
         checkpoint_dir = Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+        # Initialize WandB if enabled
+        if self.use_wandb:
+            wandb.init(
+                project=self.wandb_project,
+                name=f"{self.phase}_teacher",
+                config=self.config
+            )
+
         self.logger.info(f"Starting {self.phase} training for {num_epochs} epochs")
 
         for epoch in range(1, num_epochs + 1):
@@ -333,6 +384,30 @@ class TeacherTrainer:
                 f"Train Loss: {train_metrics['train_loss']:.4f}, "
                 f"Val Loss: {val_metrics['val_loss']:.4f}"
             )
+
+            # TensorBoard logging
+            if self.writer is not None:
+                self.writer.add_scalar('Loss/train', train_metrics['train_loss'], epoch)
+                self.writer.add_scalar('Loss/val', val_metrics['val_loss'], epoch)
+                self.writer.add_scalar('SpectrumLoss/train', train_metrics['train_spectrum_loss'], epoch)
+                self.writer.add_scalar('SpectrumLoss/val', val_metrics['val_spectrum_loss'], epoch)
+                if 'train_bond_loss' in train_metrics:
+                    self.writer.add_scalar('BondLoss/train', train_metrics['train_bond_loss'], epoch)
+                self.writer.add_scalar('LearningRate', self.optimizer.param_groups[0]['lr'], epoch)
+
+            # WandB logging
+            if self.use_wandb:
+                log_dict = {
+                    'epoch': epoch,
+                    'train_loss': train_metrics['train_loss'],
+                    'val_loss': val_metrics['val_loss'],
+                    'train_spectrum_loss': train_metrics['train_spectrum_loss'],
+                    'val_spectrum_loss': val_metrics['val_spectrum_loss'],
+                    'learning_rate': self.optimizer.param_groups[0]['lr']
+                }
+                if 'train_bond_loss' in train_metrics:
+                    log_dict['train_bond_loss'] = train_metrics['train_bond_loss']
+                wandb.log(log_dict)
 
             # Save best model
             if val_metrics['val_loss'] < self.best_val_loss:
@@ -353,10 +428,25 @@ class TeacherTrainer:
                     val_metrics
                 )
 
+            # Early stopping check
+            if self.early_stopping is not None:
+                if self.early_stopping(val_metrics['val_loss']):
+                    self.logger.info(
+                        f"Early stopping triggered at epoch {epoch}. "
+                        f"Best epoch: {self.best_epoch}, Best val loss: {self.best_val_loss:.4f}"
+                    )
+                    break
+
         self.logger.info(
             f"Training complete. Best epoch: {self.best_epoch}, "
             f"Best val loss: {self.best_val_loss:.4f}"
         )
+
+        # Cleanup logging
+        if self.writer is not None:
+            self.writer.close()
+        if self.use_wandb:
+            wandb.finish()
 
     def save_checkpoint(
         self,

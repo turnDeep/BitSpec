@@ -197,6 +197,22 @@ class NISTDataset(Dataset):
     - MOL file loading
     - Teacher mode: Graph + ECFP
     - Student mode: ECFP + Count FP
+
+    Memory Efficient Mode (TODO):
+    The config.yaml specifies a memory_efficient_mode with lazy loading
+    and HDF5 caching for handling large datasets (300k+ molecules) on
+    32GB RAM systems. This feature is currently not implemented.
+
+    To implement:
+    1. Use HDF5 for on-disk caching (h5py library)
+    2. Implement lazy loading in __getitem__
+    3. Generate graphs on-the-fly instead of pre-computing
+    4. Add gradient accumulation support in trainer
+    5. Periodic cache clearing
+
+    Expected benefits:
+    - Memory: 70-100x reduction (5GB vs 17-26GB)
+    - Trade-off: ~13% slower training speed
     """
 
     def __init__(
@@ -344,13 +360,40 @@ class NISTDataset(Dataset):
 
         # Data augmentation (if enabled)
         if self.augment and self.split == 'train':
-            # Apply LDS smoothing with probability
-            if np.random.rand() < 0.5:
-                from src.data.augmentation import label_distribution_smoothing
-                sample['spectrum'] = label_distribution_smoothing(
-                    sample['spectrum'],
-                    sigma=1.5
-                )
+            augmentation_config = self.data_config.get('augmentation', {})
+
+            # 1. Isotope Substitution
+            if augmentation_config.get('isotope', {}).get('enabled', False):
+                from src.data.augmentation import isotope_substitution
+                probability = augmentation_config['isotope'].get('probability', 0.05)
+                modified_smiles = isotope_substitution(sample['smiles'], probability)
+
+                # If SMILES changed, regenerate features
+                if modified_smiles != sample['smiles']:
+                    mol = Chem.MolFromSmiles(modified_smiles)
+                    if mol is not None:
+                        sample['smiles'] = modified_smiles
+                        if self.mode == 'teacher':
+                            sample['graph'] = mol_to_graph(mol)
+                            sample['ecfp'] = mol_to_ecfp(mol)
+                        else:
+                            sample['ecfp'] = mol_to_ecfp(mol)
+                            sample['count_fp'] = mol_to_count_fp(mol)
+
+            # 2. Conformer Generation (Teacher pretraining only)
+            # Note: Conformer generation is computationally expensive,
+            # so we only apply it with low probability or skip for now
+            # TODO: Implement conformer-based augmentation for Phase 1 pretraining
+
+            # 3. Label Distribution Smoothing
+            if augmentation_config.get('lds', {}).get('enabled', False):
+                if np.random.rand() < 0.5:
+                    from src.data.augmentation import label_distribution_smoothing
+                    sigma = augmentation_config['lds'].get('sigma', 1.5)
+                    sample['spectrum'] = label_distribution_smoothing(
+                        sample['spectrum'],
+                        sigma=sigma
+                    )
 
         # Convert to tensors
         sample['spectrum'] = torch.tensor(sample['spectrum'], dtype=torch.float32)

@@ -95,6 +95,7 @@ def main():
             num_workers=train_config['num_workers'],
             prefetch_factor=train_config.get('prefetch_factor', 2),
             pin_memory=train_config.get('pin_memory', True),
+            persistent_workers=train_config.get('persistent_workers', False) and train_config['num_workers'] > 0,
             collate_fn=collate_fn_pretrain
         )
         val_loader = DataLoader(
@@ -104,6 +105,7 @@ def main():
             num_workers=train_config['num_workers'],
             prefetch_factor=train_config.get('prefetch_factor', 2),
             pin_memory=train_config.get('pin_memory', True),
+            persistent_workers=train_config.get('persistent_workers', False) and train_config['num_workers'] > 0,
             collate_fn=collate_fn_pretrain
         )
 
@@ -134,6 +136,7 @@ def main():
             num_workers=train_config['num_workers'],
             prefetch_factor=train_config.get('prefetch_factor', 2),
             pin_memory=train_config.get('pin_memory', True),
+            persistent_workers=train_config.get('persistent_workers', False) and train_config['num_workers'] > 0,
             collate_fn=collate_fn_teacher
         )
         val_loader = DataLoader(
@@ -143,6 +146,7 @@ def main():
             num_workers=train_config['num_workers'],
             prefetch_factor=train_config.get('prefetch_factor', 2),
             pin_memory=train_config.get('pin_memory', True),
+            persistent_workers=train_config.get('persistent_workers', False) and train_config['num_workers'] > 0,
             collate_fn=collate_fn_teacher
         )
 
