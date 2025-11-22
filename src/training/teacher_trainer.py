@@ -146,13 +146,23 @@ class TeacherTrainer:
             # Move batch to device
             graph_data = batch['graph'].to(self.device)
             ecfp = batch['ecfp'].to(self.device)
-            target_spectrum = batch['spectrum'].to(self.device)
+
+            # Handle different phases
+            if self.phase == 'pretrain':
+                # Pretraining: Use dummy spectrum (all zeros) since we focus on bond masking
+                batch_size = ecfp.size(0)
+                target_spectrum = torch.zeros((batch_size, 501), device=self.device)
+
+                # Bond targets for pretraining
+                bond_targets = None
+                if 'mask_targets' in batch:
+                    bond_targets = batch['mask_targets'].to(self.device)
+            else:
+                # Finetuning: Use actual spectrum
+                target_spectrum = batch['spectrum'].to(self.device)
 
             # Optional: Bond targets for pretraining
             bond_predictions = None
-            bond_targets = None
-            if self.phase == 'pretrain' and 'bond_targets' in batch:
-                bond_targets = batch['bond_targets'].to(self.device)
 
             # Forward pass with mixed precision
             with autocast(enabled=self.use_amp):
@@ -240,7 +250,15 @@ class TeacherTrainer:
         for batch in tqdm(val_loader, desc="Validation"):
             graph_data = batch['graph'].to(self.device)
             ecfp = batch['ecfp'].to(self.device)
-            target_spectrum = batch['spectrum'].to(self.device)
+
+            # Handle different phases
+            if self.phase == 'pretrain':
+                # Pretraining: Use dummy spectrum
+                batch_size = ecfp.size(0)
+                target_spectrum = torch.zeros((batch_size, 501), device=self.device)
+            else:
+                # Finetuning: Use actual spectrum
+                target_spectrum = batch['spectrum'].to(self.device)
 
             with autocast(enabled=self.use_amp):
                 if use_mc_dropout and self.phase == 'finetune':
