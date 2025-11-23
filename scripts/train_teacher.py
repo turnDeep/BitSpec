@@ -84,7 +84,7 @@ def main():
             data_config=data_config,
             split='val',
             mask_ratio=0.15,
-            download=False
+            download=True
         )
 
         # Create data loaders

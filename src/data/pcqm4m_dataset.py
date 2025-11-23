@@ -251,34 +251,45 @@ class PCQM4Mv2Dataset(Dataset):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load OGB dataset
-        if download:
-            ogb_dataset = download_pcqm4mv2(str(data_dir))
+        # Shared SMILES cache (used by both train and val)
+        smiles_cache_file = self.cache_dir / 'pcqm4mv2_smiles.pkl'
+
+        # Split-specific index cache
+        split_cache_file = self.cache_dir / f'pcqm4mv2_{split}_indices.pkl'
+
+        # Try to load shared SMILES cache first
+        if smiles_cache_file.exists():
+            logger.info(f"Loading shared SMILES cache from {smiles_cache_file}")
+            with open(smiles_cache_file, 'rb') as f:
+                self.smiles_list = pickle.load(f)
         else:
-            ogb_dataset = None
+            # Need to process OGB data
+            if download:
+                ogb_dataset = download_pcqm4mv2(str(data_dir))
+            else:
+                ogb_dataset = None
 
-        # Cache file
-        cache_file = self.cache_dir / f'pcqm4mv2_{split}_processed.pkl'
+            logger.info(f"Processing PCQM4Mv2 to create shared SMILES cache...")
+            self.smiles_list = self._process_ogb_data(ogb_dataset, data_dir)
 
-        if cache_file.exists():
-            logger.info(f"Loading cached PCQM4Mv2 from {cache_file}")
-            with open(cache_file, 'rb') as f:
-                cache_data = pickle.load(f)
-                self.smiles_list = cache_data['smiles']
-                self.split_indices = cache_data['indices']
+            # Save shared SMILES cache
+            with open(smiles_cache_file, 'wb') as f:
+                pickle.dump(self.smiles_list, f)
+            logger.info(f"Shared SMILES cache saved to {smiles_cache_file}")
+
+        # Now handle split indices
+        if split_cache_file.exists():
+            logger.info(f"Loading {split} indices from {split_cache_file}")
+            with open(split_cache_file, 'rb') as f:
+                self.split_indices = pickle.load(f)
         else:
-            logger.info(f"Processing PCQM4Mv2 for {split} split...")
-            self.smiles_list, self.split_indices = self._process_ogb_data(
-                ogb_dataset, data_dir
-            )
+            logger.info(f"Creating {split} split indices...")
+            self.split_indices = self._create_split_indices(split)
 
-            # Save cache
-            with open(cache_file, 'wb') as f:
-                pickle.dump({
-                    'smiles': self.smiles_list,
-                    'indices': self.split_indices
-                }, f)
-            logger.info(f"Cached to {cache_file}")
+            # Save split indices
+            with open(split_cache_file, 'wb') as f:
+                pickle.dump(self.split_indices, f)
+            logger.info(f"Split indices cached to {split_cache_file}")
 
         logger.info(f"Loaded PCQM4Mv2 {split}: {len(self.split_indices)} molecules")
 
@@ -286,7 +297,7 @@ class PCQM4Mv2Dataset(Dataset):
         self,
         ogb_dataset,
         data_dir: Path
-    ) -> Tuple[List[str], List[int]]:
+    ) -> List[str]:
         """Process OGB dataset with validation and filtering"""
         smiles_list = []
         valid_count = 0
@@ -350,22 +361,26 @@ class PCQM4Mv2Dataset(Dataset):
                     'CC(C)C',  # Isobutane
                 ] * 1000  # Increased for better validation
 
+        return smiles_list
+
+    def _create_split_indices(self, split: str) -> List[int]:
+        """Create train/val split indices from SMILES list"""
         # Split data with minimum validation size
         np.random.seed(42)
-        indices = np.random.permutation(len(smiles_list))
+        indices = np.random.permutation(len(self.smiles_list))
 
         # Ensure validation set has at least 5000 samples or 10% (whichever is larger)
         min_val_size = min(5000, int(len(indices) * 0.1))
         split_idx = len(indices) - min_val_size
 
-        if self.split == 'train':
+        if split == 'train':
             split_indices = indices[:split_idx].tolist()
         else:  # val
             split_indices = indices[split_idx:].tolist()
 
         logger.info(f"Split sizes - Train: {len(indices[:split_idx])}, Val: {len(indices[split_idx:])}")
 
-        return smiles_list, split_indices
+        return split_indices
 
     def __len__(self) -> int:
         return len(self.split_indices)
