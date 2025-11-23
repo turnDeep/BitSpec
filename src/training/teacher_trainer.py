@@ -299,6 +299,7 @@ class TeacherTrainer:
 
         total_loss = 0.0
         total_spectrum_loss = 0.0
+        total_bond_loss = 0.0
         num_batches = 0
 
         for batch in tqdm(val_loader, desc="Validation"):
@@ -306,10 +307,18 @@ class TeacherTrainer:
             ecfp = batch['ecfp'].to(self.device)
 
             # Handle different phases
+            bond_predictions = None
+            bond_targets = None
+
             if self.phase == 'pretrain':
-                # Pretraining: Use dummy spectrum
+                # Pretraining: Focus on bond masking task
+                # Use dummy spectrum (zeros) since we only care about bond loss
                 batch_size = ecfp.size(0)
                 target_spectrum = torch.zeros((batch_size, 501), device=self.device)
+
+                # Bond targets for validation
+                if 'mask_targets' in batch:
+                    bond_targets = batch['mask_targets'].to(self.device)
             else:
                 # Finetuning: Use actual spectrum
                 target_spectrum = batch['spectrum'].to(self.device)
@@ -323,24 +332,47 @@ class TeacherTrainer:
                     )
                 else:
                     # Standard forward pass
-                    predicted_spectrum = self.model(graph_data, ecfp, dropout=False)
+                    if self.phase == 'pretrain' and bond_targets is not None:
+                        # Return bond predictions for validation
+                        model_output = self.model(graph_data, ecfp, dropout=False, return_bond_predictions=True)
+                        if isinstance(model_output, tuple):
+                            predicted_spectrum, bond_predictions = model_output
+                        else:
+                            predicted_spectrum = model_output
+                            bond_predictions = None
+
+                        # Filter bond_targets to match bond_predictions
+                        if bond_predictions is not None and hasattr(graph_data, 'valid_bond_mask'):
+                            bond_targets = bond_targets[graph_data.valid_bond_mask]
+                    else:
+                        predicted_spectrum = self.model(graph_data, ecfp, dropout=False)
 
                 # Compute loss
                 loss, loss_dict = self.criterion(
                     predicted_spectrum,
                     target_spectrum,
-                    None,
-                    None
+                    bond_predictions,
+                    bond_targets
                 )
 
             total_loss += loss_dict['total_loss']
             total_spectrum_loss += loss_dict['spectrum_loss']
+            if 'bond_loss' in loss_dict:
+                total_bond_loss += loss_dict['bond_loss']
             num_batches += 1
 
         metrics = {
-            'val_loss': total_loss / num_batches,
             'val_spectrum_loss': total_spectrum_loss / num_batches,
         }
+
+        # For pretraining, use bond_loss as the primary validation metric
+        if self.phase == 'pretrain':
+            metrics['val_bond_loss'] = total_bond_loss / num_batches
+            # Use bond_loss as val_loss for model selection
+            metrics['val_loss'] = metrics['val_bond_loss']
+        else:
+            # For finetuning, use spectrum_loss as val_loss
+            metrics['val_loss'] = total_loss / num_batches
 
         return metrics
 
@@ -384,20 +416,36 @@ class TeacherTrainer:
             val_metrics = self.validate(val_loader, use_mc_dropout=use_mc)
 
             # Log metrics
-            self.logger.info(
-                f"Epoch {epoch}/{num_epochs} - "
-                f"Train Loss: {train_metrics['train_loss']:.4f}, "
-                f"Val Loss: {val_metrics['val_loss']:.4f}"
-            )
+            if self.phase == 'pretrain':
+                self.logger.info(
+                    f"Epoch {epoch}/{num_epochs} - "
+                    f"Train Loss: {train_metrics['train_loss']:.4f}, "
+                    f"Train Bond Loss: {train_metrics.get('train_bond_loss', 0.0):.4f}, "
+                    f"Val Bond Loss: {val_metrics.get('val_bond_loss', 0.0):.4f}"
+                )
+            else:
+                self.logger.info(
+                    f"Epoch {epoch}/{num_epochs} - "
+                    f"Train Loss: {train_metrics['train_loss']:.4f}, "
+                    f"Val Loss: {val_metrics['val_loss']:.4f}"
+                )
 
             # TensorBoard logging
             if self.writer is not None:
                 self.writer.add_scalar('Loss/train', train_metrics['train_loss'], epoch)
                 self.writer.add_scalar('Loss/val', val_metrics['val_loss'], epoch)
-                self.writer.add_scalar('SpectrumLoss/train', train_metrics['train_spectrum_loss'], epoch)
-                self.writer.add_scalar('SpectrumLoss/val', val_metrics['val_spectrum_loss'], epoch)
-                if 'train_bond_loss' in train_metrics:
-                    self.writer.add_scalar('BondLoss/train', train_metrics['train_bond_loss'], epoch)
+
+                if self.phase == 'pretrain':
+                    # Pretraining: Log bond masking metrics
+                    if 'train_bond_loss' in train_metrics:
+                        self.writer.add_scalar('BondLoss/train', train_metrics['train_bond_loss'], epoch)
+                    if 'val_bond_loss' in val_metrics:
+                        self.writer.add_scalar('BondLoss/val', val_metrics['val_bond_loss'], epoch)
+                else:
+                    # Finetuning: Log spectrum metrics
+                    self.writer.add_scalar('SpectrumLoss/train', train_metrics['train_spectrum_loss'], epoch)
+                    self.writer.add_scalar('SpectrumLoss/val', val_metrics['val_spectrum_loss'], epoch)
+
                 self.writer.add_scalar('LearningRate', self.optimizer.param_groups[0]['lr'], epoch)
 
             # WandB logging
@@ -406,12 +454,20 @@ class TeacherTrainer:
                     'epoch': epoch,
                     'train_loss': train_metrics['train_loss'],
                     'val_loss': val_metrics['val_loss'],
-                    'train_spectrum_loss': train_metrics['train_spectrum_loss'],
-                    'val_spectrum_loss': val_metrics['val_spectrum_loss'],
                     'learning_rate': self.optimizer.param_groups[0]['lr']
                 }
-                if 'train_bond_loss' in train_metrics:
-                    log_dict['train_bond_loss'] = train_metrics['train_bond_loss']
+
+                if self.phase == 'pretrain':
+                    # Pretraining: Log bond masking metrics
+                    if 'train_bond_loss' in train_metrics:
+                        log_dict['train_bond_loss'] = train_metrics['train_bond_loss']
+                    if 'val_bond_loss' in val_metrics:
+                        log_dict['val_bond_loss'] = val_metrics['val_bond_loss']
+                else:
+                    # Finetuning: Log spectrum metrics
+                    log_dict['train_spectrum_loss'] = train_metrics['train_spectrum_loss']
+                    log_dict['val_spectrum_loss'] = val_metrics['val_spectrum_loss']
+
                 wandb.log(log_dict)
 
             # Save best model
