@@ -311,7 +311,8 @@ class PCQM4Mv2Dataset(Dataset):
 
                 # Filter valid molecules
                 logger.info(f"Validating {len(all_smiles)} molecules...")
-                for smi in all_smiles:
+                from tqdm import tqdm
+                for smi in tqdm(all_smiles, desc="Validating molecules", unit="mol"):
                     mol = Chem.MolFromSmiles(smi)
                     if is_valid_mol(mol):
                         smiles_list.append(smi)
@@ -330,7 +331,8 @@ class PCQM4Mv2Dataset(Dataset):
                     all_smiles = [line.strip() for line in f if line.strip()]
 
                 # Filter valid molecules
-                for smi in all_smiles:
+                from tqdm import tqdm
+                for smi in tqdm(all_smiles, desc="Validating molecules", unit="mol"):
                     mol = Chem.MolFromSmiles(smi)
                     if is_valid_mol(mol):
                         smiles_list.append(smi)
