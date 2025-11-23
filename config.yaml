@@ -11,7 +11,7 @@ project:
 # データ設定
 data:
   # NIST EI-MS データ
-  nist_msp_path: "data/NIST17.msp"
+  nist_msp_path: "data/NIST17.MSP"
   mol_files_dir: "data/mol_files"
 
   # PCQM4Mv2 事前学習データ（自動ダウンロード）
