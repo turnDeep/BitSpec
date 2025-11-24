@@ -369,6 +369,15 @@ class StudentTrainer:
                 self.scheduler.step()
 
             # Update metrics
+            # Check for NaN losses
+            if (torch.isnan(torch.tensor(loss_dict['total_loss'])) or
+                torch.isinf(torch.tensor(loss_dict['total_loss']))):
+                self.logger.error(f"NaN or Inf detected in loss at epoch {epoch}, batch {batch_idx}")
+                self.logger.error(f"Loss components: {loss_dict}")
+                self.logger.error(f"Learning rate: {self.optimizer.param_groups[0]['lr']}")
+                raise ValueError("Training diverged: NaN or Inf loss detected. "
+                               "Try lowering learning rate or increasing gradient clipping.")
+
             total_loss += loss_dict['total_loss']
             total_hard_loss += loss_dict['hard_loss']
             total_soft_loss += loss_dict['soft_loss']
