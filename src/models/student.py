@@ -225,10 +225,16 @@ class StudentModel(nn.Module):
         """
         # Gate decision (with bias for load balancing)
         gate_logits = self.gate.mlp(ecfp_count_fp)  # [batch_size, num_experts]
-        gate_logits = gate_logits + self.expert_bias.unsqueeze(0)
+        gate_logits = gate_logits + self.expert_bias.unsqueeze(0)  # Apply bias
 
-        # Get expert routing
-        expert_weights, expert_indices, all_weights = self.gate.forward(ecfp_count_fp)
+        # Get expert routing from biased logits
+        all_weights = F.softmax(gate_logits, dim=-1)
+
+        # Top-k routing
+        top_k_weights, expert_indices = torch.topk(all_weights, self.top_k, dim=-1)
+
+        # Renormalize top-k weights
+        expert_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
 
         # Compute expert outputs (only for selected experts)
         batch_size = ecfp_count_fp.size(0)
@@ -278,7 +284,14 @@ class StudentModel(nn.Module):
         Returns:
             features: Hidden features before prediction head [batch_size, 6144]
         """
-        expert_weights, expert_indices, _ = self.gate(ecfp_count_fp)
+        # Gate decision (with bias for load balancing)
+        gate_logits = self.gate.mlp(ecfp_count_fp)
+        gate_logits = gate_logits + self.expert_bias.unsqueeze(0)
+
+        # Get expert routing from biased logits
+        all_weights = F.softmax(gate_logits, dim=-1)
+        top_k_weights, expert_indices = torch.topk(all_weights, self.top_k, dim=-1)
+        expert_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
 
         batch_size = ecfp_count_fp.size(0)
         combined = torch.zeros(batch_size, self.input_dim, device=ecfp_count_fp.device)
