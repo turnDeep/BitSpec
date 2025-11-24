@@ -1,10 +1,10 @@
 # config.yaml
-# NEIMS v2.0 システム設定ファイル
+# NExtIMS システム設定ファイル
 # Teacher-Student Knowledge Distillation with MoE Architecture
 
 # プロジェクト設定
 project:
-  name: "NEIMS_v2"
+  name: "NExtIMS"
   description: "Neural EI-MS Prediction with Knowledge Distillation and MoE"
   version: "2.0.0"
 
