@@ -181,9 +181,12 @@ class GaussianSmoothing(nn.Module):
         # Add channel dimension
         spectrum = spectrum.unsqueeze(1)  # [batch_size, 1, 501]
 
+        # Ensure kernel has the same dtype and device as input
+        kernel = self.kernel.to(dtype=spectrum.dtype, device=spectrum.device)
+
         # Apply convolution
         padding = self.kernel_size // 2
-        smoothed = F.conv1d(spectrum, self.kernel, padding=padding)
+        smoothed = F.conv1d(spectrum, kernel, padding=padding)
 
         # Remove channel dimension
         smoothed = smoothed.squeeze(1)  # [batch_size, 501]
