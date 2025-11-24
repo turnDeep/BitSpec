@@ -221,6 +221,7 @@ class NISTDataset(Dataset):
     - MOL file loading
     - Teacher mode: Graph + ECFP
     - Student mode: ECFP + Count FP
+    - Distill mode: Graph + ECFP + Count FP (for knowledge distillation)
 
     Memory Efficient Mode (IMPLEMENTED):
     Supports lazy loading with HDF5 caching for handling large datasets
@@ -258,7 +259,7 @@ class NISTDataset(Dataset):
         """
         Args:
             data_config: Data configuration from config.yaml
-            mode: 'teacher' (GNN+ECFP) or 'student' (ECFP only)
+            mode: 'teacher' (GNN+ECFP), 'student' (ECFP+CountFP), or 'distill' (GNN+ECFP+CountFP)
             split: Data split
             augment: Apply data augmentation
             cache_dir: Cache directory for processed data
@@ -376,7 +377,12 @@ class NISTDataset(Dataset):
                 if self.mode == 'teacher':
                     sample['graph'] = mol_to_graph(mol)
                     sample['ecfp'] = mol_to_ecfp(mol)
-                else:  # student
+                elif self.mode == 'student':
+                    sample['ecfp'] = mol_to_ecfp(mol)
+                    sample['count_fp'] = mol_to_count_fp(mol)
+                elif self.mode == 'distill':
+                    # Knowledge distillation mode: all features
+                    sample['graph'] = mol_to_graph(mol)
                     sample['ecfp'] = mol_to_ecfp(mol)
                     sample['count_fp'] = mol_to_count_fp(mol)
 
@@ -555,6 +561,7 @@ class NISTDataset(Dataset):
         Returns:
             For teacher: {graph, ecfp, spectrum}
             For student: {ecfp, count_fp, spectrum}
+            For distill: {graph, ecfp, count_fp, spectrum}
         """
         if self.use_lazy_loading:
             # Lazy loading: Load from HDF5 and generate features on-the-fly
@@ -584,7 +591,12 @@ class NISTDataset(Dataset):
             if self.mode == 'teacher':
                 sample['graph'] = mol_to_graph(mol)
                 sample['ecfp'] = mol_to_ecfp(mol)
-            else:
+            elif self.mode == 'student':
+                sample['ecfp'] = mol_to_ecfp(mol)
+                sample['count_fp'] = mol_to_count_fp(mol)
+            elif self.mode == 'distill':
+                # Knowledge distillation mode: all features
+                sample['graph'] = mol_to_graph(mol)
                 sample['ecfp'] = mol_to_ecfp(mol)
                 sample['count_fp'] = mol_to_count_fp(mol)
 
@@ -610,7 +622,12 @@ class NISTDataset(Dataset):
                         if self.mode == 'teacher':
                             sample['graph'] = mol_to_graph(mol)
                             sample['ecfp'] = mol_to_ecfp(mol)
-                        else:
+                        elif self.mode == 'student':
+                            sample['ecfp'] = mol_to_ecfp(mol)
+                            sample['count_fp'] = mol_to_count_fp(mol)
+                        elif self.mode == 'distill':
+                            # Knowledge distillation mode: all features
+                            sample['graph'] = mol_to_graph(mol)
                             sample['ecfp'] = mol_to_ecfp(mol)
                             sample['count_fp'] = mol_to_count_fp(mol)
 
@@ -671,5 +688,38 @@ def collate_fn_student(batch: List[Dict]) -> Dict:
         'input': student_input,
         'ecfp': ecfps,
         'count_fp': count_fps,
+        'spectrum': spectra
+    }
+
+
+def collate_fn_distill(batch: List[Dict]) -> Dict:
+    """
+    Custom collate for Knowledge Distillation
+
+    Combines both Teacher and Student data in a single batch.
+    Expects samples to have: graph, ecfp, count_fp, spectrum
+    """
+    from torch_geometric.data import Batch
+
+    # Teacher data
+    graphs = [sample['graph'] for sample in batch]
+    graph_batch = Batch.from_data_list(graphs)
+
+    # Common data
+    ecfps = torch.stack([sample['ecfp'] for sample in batch])
+    count_fps = torch.stack([sample['count_fp'] for sample in batch])
+    spectra = torch.stack([sample['spectrum'] for sample in batch])
+
+    # Student input: ECFP + Count FP
+    ecfp_count_fp = torch.cat([ecfps, count_fps], dim=-1)  # [batch, 6144]
+
+    return {
+        # Teacher inputs
+        'graph': graph_batch,
+        'ecfp': ecfps,
+        # Student inputs
+        'ecfp_count_fp': ecfp_count_fp,
+        'count_fp': count_fps,
+        # Common
         'spectrum': spectra
     }
