@@ -63,13 +63,18 @@ def parse_msp_file(msp_path: str) -> List[Dict]:
             elif line.startswith('SMILES:'):
                 current_entry['smiles'] = line.split(':', 1)[1].strip()
 
-            elif line.startswith('Num Peaks:'):
+            elif line.startswith('ID:'):
+                current_entry['id'] = line.split(':', 1)[1].strip()
+
+            elif line.startswith('Num peaks:') or line.startswith('Num Peaks:'):
                 current_entry['num_peaks'] = int(line.split(':')[1].strip())
                 current_entry['peaks'] = []
 
             elif 'num_peaks' in current_entry and len(current_entry['peaks']) < current_entry['num_peaks']:
-                # Parse peak data: "mz intensity; mz intensity; ..."
+                # Parse peak data: "mz intensity" (one peak per line)
+                # Also support semicolon-separated format: "mz intensity; mz intensity; ..."
                 if ';' in line:
+                    # Semicolon-separated format
                     for peak_str in line.split(';'):
                         if peak_str.strip():
                             parts = peak_str.strip().split()
@@ -77,6 +82,16 @@ def parse_msp_file(msp_path: str) -> List[Dict]:
                                 mz = float(parts[0])
                                 intensity = float(parts[1])
                                 current_entry['peaks'].append((mz, intensity))
+                else:
+                    # One peak per line format
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            mz = float(parts[0])
+                            intensity = float(parts[1])
+                            current_entry['peaks'].append((mz, intensity))
+                        except ValueError:
+                            pass  # Skip invalid lines
 
     if current_entry:
         entries.append(current_entry)
@@ -318,22 +333,41 @@ class NISTDataset(Dataset):
 
         # Try MSP file first
         msp_path = self.data_config.get('nist_msp_path', 'data/NIST17.msp')
+        mol_dir = Path(self.data_config.get('mol_files_dir', 'data/mol_files'))
+
         if os.path.exists(msp_path):
             logger.info(f"Parsing MSP file: {msp_path}")
             entries = parse_msp_file(msp_path)
+            logger.info(f"Found {len(entries)} entries in MSP file")
 
             for entry in entries:
-                if 'smiles' not in entry or 'peaks' not in entry:
+                if 'peaks' not in entry:
                     continue
 
-                mol = Chem.MolFromSmiles(entry['smiles'])
+                # Try to get molecular structure
+                mol = None
+                smiles = None
+
+                # Option 1: Use SMILES from MSP if available
+                if 'smiles' in entry and entry['smiles']:
+                    smiles = entry['smiles']
+                    mol = Chem.MolFromSmiles(smiles)
+
+                # Option 2: Load from MOL file using ID
+                if mol is None and 'id' in entry and mol_dir.exists():
+                    mol_file = mol_dir / f"ID{entry['id']}.MOL"
+                    if mol_file.exists():
+                        mol = Chem.MolFromMolFile(str(mol_file), sanitize=True, removeHs=False)
+                        if mol is not None:
+                            smiles = Chem.MolToSmiles(mol)
+
                 if mol is None:
                     continue
 
                 spectrum = peaks_to_spectrum(entry['peaks'], self.max_mz)
 
                 sample = {
-                    'smiles': entry['smiles'],
+                    'smiles': smiles,
                     'spectrum': spectrum,
                     'name': entry.get('name', ''),
                 }
@@ -410,6 +444,7 @@ class NISTDataset(Dataset):
 
         # Try MSP file first
         msp_path = self.data_config.get('nist_msp_path', 'data/NIST17.msp')
+        mol_dir = Path(self.data_config.get('mol_files_dir', 'data/mol_files'))
 
         # Temporary data storage for HDF5
         all_smiles = []
@@ -419,18 +454,35 @@ class NISTDataset(Dataset):
         if os.path.exists(msp_path):
             logger.info(f"Parsing MSP file: {msp_path}")
             entries = parse_msp_file(msp_path)
+            logger.info(f"Found {len(entries)} entries in MSP file")
 
             for entry in entries:
-                if 'smiles' not in entry or 'peaks' not in entry:
+                if 'peaks' not in entry:
                     continue
 
-                mol = Chem.MolFromSmiles(entry['smiles'])
+                # Try to get molecular structure
+                mol = None
+                smiles = None
+
+                # Option 1: Use SMILES from MSP if available
+                if 'smiles' in entry and entry['smiles']:
+                    smiles = entry['smiles']
+                    mol = Chem.MolFromSmiles(smiles)
+
+                # Option 2: Load from MOL file using ID
+                if mol is None and 'id' in entry and mol_dir.exists():
+                    mol_file = mol_dir / f"ID{entry['id']}.MOL"
+                    if mol_file.exists():
+                        mol = Chem.MolFromMolFile(str(mol_file), sanitize=True, removeHs=False)
+                        if mol is not None:
+                            smiles = Chem.MolToSmiles(mol)
+
                 if mol is None:
                     continue
 
                 spectrum = peaks_to_spectrum(entry['peaks'], self.max_mz)
 
-                all_smiles.append(entry['smiles'])
+                all_smiles.append(smiles)
                 all_spectra.append(spectrum)
                 all_names.append(entry.get('name', ''))
 
