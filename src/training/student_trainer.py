@@ -247,6 +247,17 @@ class StudentTrainer:
                     'gamma': self.criterion.gamma
                 }
 
+            # ✅ NaN/Inf check BEFORE backward() to prevent weight corruption
+            if (torch.isnan(loss) or torch.isinf(loss) or
+                torch.isnan(loss_hard_tensor) or torch.isinf(loss_hard_tensor) or
+                torch.isnan(loss_soft_tensor) or torch.isinf(loss_soft_tensor) or
+                torch.isnan(loss_feature_tensor) or torch.isinf(loss_feature_tensor)):
+                self.logger.warning(f"⚠️ NaN or Inf detected BEFORE backward at epoch {epoch}, batch {batch_idx}")
+                self.logger.warning(f"Loss components: {loss_dict}")
+                self.logger.warning(f"Learning rate: {self.optimizer.param_groups[0]['lr']}")
+                self.logger.warning("Skipping backward/step to preserve model weights...")
+                continue  # Skip this batch entirely (no backward, no step)
+
             # Backward pass
             self.optimizer.zero_grad()
 
@@ -368,16 +379,7 @@ class StudentTrainer:
             ):
                 self.scheduler.step()
 
-            # Update metrics
-            # Check for NaN losses (skip batch but continue training)
-            if (torch.isnan(torch.tensor(loss_dict['total_loss'])) or
-                torch.isinf(torch.tensor(loss_dict['total_loss']))):
-                self.logger.warning(f"NaN or Inf detected in loss at epoch {epoch}, batch {batch_idx}")
-                self.logger.warning(f"Loss components: {loss_dict}")
-                self.logger.warning(f"Learning rate: {self.optimizer.param_groups[0]['lr']}")
-                self.logger.warning("Skipping this batch and continuing training...")
-                continue  # Skip this batch
-
+            # Update metrics (NaN check already done before backward)
             total_loss += loss_dict['total_loss']
             total_hard_loss += loss_dict['hard_loss']
             total_soft_loss += loss_dict['soft_loss']
