@@ -369,6 +369,15 @@ class StudentTrainer:
                 self.scheduler.step()
 
             # Update metrics
+            # Check for NaN losses (skip batch but continue training)
+            if (torch.isnan(torch.tensor(loss_dict['total_loss'])) or
+                torch.isinf(torch.tensor(loss_dict['total_loss']))):
+                self.logger.warning(f"NaN or Inf detected in loss at epoch {epoch}, batch {batch_idx}")
+                self.logger.warning(f"Loss components: {loss_dict}")
+                self.logger.warning(f"Learning rate: {self.optimizer.param_groups[0]['lr']}")
+                self.logger.warning("Skipping this batch and continuing training...")
+                continue  # Skip this batch
+
             total_loss += loss_dict['total_loss']
             total_hard_loss += loss_dict['hard_loss']
             total_soft_loss += loss_dict['soft_loss']
