@@ -274,6 +274,12 @@ def main():
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda/cpu)')
     parser.add_argument('--uncertainty', action='store_true',
                         help='Return uncertainty (Teacher only)')
+    parser.add_argument('--top-n', type=int, default=20,
+                        help='Number of top peaks to export (default: 20)')
+    parser.add_argument('--threshold', type=float, default=0.01,
+                        help='Minimum intensity threshold (default: 0.01)')
+    parser.add_argument('--check-mz', type=str,
+                        help='Comma-separated list of m/z values to check (e.g., "314,299")')
 
     args = parser.parse_args()
 
@@ -294,19 +300,64 @@ def main():
             return_uncertainty=args.uncertainty and args.model == 'teacher'
         )
 
+        # Display spectrum statistics
+        logger.info(f"\nSpectrum statistics:")
+        logger.info(f"  Max intensity: {spectrum.max():.6f} at m/z {spectrum.argmax()}")
+        logger.info(f"  Mean intensity: {spectrum.mean():.6f}")
+        logger.info(f"  Non-zero peaks: {np.count_nonzero(spectrum > 0.001)}")
+        logger.info(f"  Peaks > 0.01: {np.count_nonzero(spectrum > 0.01)}")
+
         # Display top peaks
-        peaks = predictor.find_top_peaks(spectrum)
-        logger.info(f"\nTop 10 peaks:")
-        for i, (mz, intensity) in enumerate(peaks[:10], 1):
-            logger.info(f"  {i}. m/z {mz}: {intensity:.4f}")
+        peaks = predictor.find_top_peaks(spectrum, top_n=50, threshold=0.001)
+        logger.info(f"\nTop 20 peaks (threshold=0.001):")
+        for i, (mz, intensity) in enumerate(peaks[:20], 1):
+            logger.info(f"  {i}. m/z {mz}: {intensity:.6f}")
+
+        # Check specific m/z values if molecule is large enough
+        mol = Chem.MolFromSmiles(args.smiles)
+        mol_weight = Chem.Descriptors.ExactMolWt(mol)
+        logger.info(f"\nMolecular weight: {mol_weight:.2f}")
+
+        # Check high m/z region
+        if mol_weight > 200:
+            logger.info(f"\nHigh m/z region check:")
+            for mz in [int(mol_weight), int(mol_weight) - 15, int(mol_weight) - 29]:
+                if mz < len(spectrum):
+                    logger.info(f"  m/z {mz}: {spectrum[mz]:.6f}")
+
+        # Check user-specified m/z values
+        if args.check_mz:
+            logger.info(f"\nUser-specified m/z values:")
+            mz_values = [int(x.strip()) for x in args.check_mz.split(',')]
+            for mz in mz_values:
+                if 0 <= mz < len(spectrum):
+                    logger.info(f"  m/z {mz}: {spectrum[mz]:.6f}")
+                else:
+                    logger.warning(f"  m/z {mz}: out of range (max={len(spectrum)-1})")
 
         # Display uncertainty if available
         if uncertainty is not None:
             mean_uncertainty = uncertainty.mean()
             logger.info(f"\nMean uncertainty: {mean_uncertainty:.4f}")
 
-        # Export
-        predictor.export_msp(args.smiles, args.output)
+        # Export (using user-specified parameters)
+        logger.info(f"\nExporting MSP with top_n={args.top_n}, threshold={args.threshold}")
+        # Create a custom export for user-specified parameters
+        export_peaks = predictor.find_top_peaks(spectrum, top_n=args.top_n, threshold=args.threshold)
+
+        compound_name = f"Predicted_{Chem.MolToInchiKey(mol)}"
+
+        with open(args.output, 'w') as f:
+            f.write(f"Name: {compound_name}\n")
+            f.write(f"SMILES: {args.smiles}\n")
+            f.write(f"InChIKey: {Chem.MolToInchiKey(mol)}\n")
+            f.write(f"Num Peaks: {len(export_peaks)}\n")
+
+            for mz, intensity in export_peaks:
+                f.write(f"{mz} {intensity:.6f}; ")
+            f.write("\n")
+
+        logger.info(f"Exported {len(export_peaks)} peaks to {args.output}")
 
     elif args.batch:
         # Batch prediction
