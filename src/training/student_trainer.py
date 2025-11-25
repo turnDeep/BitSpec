@@ -136,6 +136,17 @@ class StudentTrainer:
                 steps_per_epoch=steps_per_epoch,
                 pct_start=self.train_config.get('pct_start', 0.1)
             )
+        elif scheduler_name == 'CosineAnnealingWarmRestarts':
+            T_0 = self.train_config.get('T_0', 30)
+            T_mult = self.train_config.get('T_mult', 2)
+            eta_min = self.train_config.get('eta_min', 1e-6)
+
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                self.optimizer,
+                T_0=T_0,
+                T_mult=T_mult,
+                eta_min=eta_min
+            )
         else:
             scheduler = None
 
@@ -257,6 +268,18 @@ class StudentTrainer:
                 self.logger.warning(f"Learning rate: {self.optimizer.param_groups[0]['lr']}")
                 self.logger.warning("Skipping backward/step to preserve model weights...")
                 continue  # Skip this batch entirely (no backward, no step)
+
+            # ✅ Extreme value check to prevent gradient explosion
+            # Loss is typically 0.01-0.1 range in knowledge distillation
+            LOSS_THRESHOLD = 0.5  # Values above this indicate instability
+            if loss.item() > LOSS_THRESHOLD:
+                self.logger.warning(f"⚠️ Extreme loss value detected: {loss.item():.4f} > {LOSS_THRESHOLD}")
+                self.logger.warning(f"Loss components: hard={loss_dict['hard_loss']:.4f}, "
+                                  f"soft={loss_dict['soft_loss']:.4f}, "
+                                  f"feature={loss_dict['feature_loss']:.4f}")
+                self.logger.warning(f"Learning rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+                self.logger.warning("Skipping batch to prevent gradient explosion...")
+                continue  # Skip this batch to prevent trajectory damage
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -470,6 +493,14 @@ class StudentTrainer:
 
             # Validate
             val_metrics = self.validate(val_loader)
+
+            # Scheduler step (for per-epoch schedulers like CosineAnnealingWarmRestarts)
+            # OneCycleLR steps per batch (handled in train_epoch)
+            if self.scheduler and not isinstance(
+                self.scheduler,
+                torch.optim.lr_scheduler.OneCycleLR
+            ):
+                self.scheduler.step()
 
             # Log metrics
             self.logger.info(

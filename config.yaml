@@ -183,12 +183,13 @@ training:
     num_epochs: 150
     num_workers: 8
     prefetch_factor: 4
-    learning_rate: 2.0e-4        # 学習率をさらに下げる（0.0003 → 0.0002）
+    learning_rate: 1.5e-4        # 初期学習率（安定化のため削減）
     weight_decay: 1.0e-4
     optimizer: "AdamW"
-    scheduler: "OneCycleLR"
-    max_lr: 3.0e-4               # 最大学習率をさらに下げる（0.0005 → 0.0003）
-    pct_start: 0.1               # 10% warmup
+    scheduler: "CosineAnnealingWarmRestarts"  # OneCycleLRから変更（安定性向上）
+    T_0: 30                      # 最初のサイクル長（30エポック）
+    T_mult: 2                    # 次のサイクルは2倍長く（30→60→120）
+    eta_min: 1.0e-6              # 最小学習率
     gradient_clip: 0.3           # 勾配クリッピングを強化（0.5 → 0.3）
     use_amp: false               # Mixed Precisionを無効化（NaN対策）
     checkpoint_dir: "checkpoints/student"

@@ -296,6 +296,18 @@ class GradNormWeighting:
             else:
                 updated_weights[weight_name] = loss_weights.get(weight_name, 0.0)
 
+        # ✅ Constrain weights to prevent extreme values (GradNorm paper recommendation)
+        # This prevents the issue where one loss dominates and others go to near-zero
+        WEIGHT_CONSTRAINTS = {
+            'alpha': (0.05, 0.60),   # Hard Loss: 5-60%
+            'beta': (0.20, 0.80),    # Soft Loss: 20-80%
+            'gamma': (0.05, 0.50)    # Feature Loss: 5-50%
+        }
+
+        for weight_name, (min_val, max_val) in WEIGHT_CONSTRAINTS.items():
+            if weight_name in updated_weights:
+                updated_weights[weight_name] = max(min_val, min(max_val, updated_weights[weight_name]))
+
         # Normalize weights to sum to 1.0
         total = sum(updated_weights.values())
         if total > 0:
