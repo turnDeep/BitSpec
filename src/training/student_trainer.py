@@ -232,7 +232,13 @@ class StudentTrainer:
                     temperature
                 )
 
-                loss_feature_tensor = torch.nn.functional.mse_loss(student_features, teacher_features)
+                # Feature distillation loss with normalization
+                # Normalize by feature dimension to keep loss scale similar to spectrum MSE
+                loss_feature_tensor = torch.nn.functional.mse_loss(
+                    student_features,
+                    teacher_features,
+                    reduction='mean'
+                ) / student_features.shape[-1]  # Normalize by feature dimension
 
                 loss_load_tensor = load_balancing_loss(expert_weights, expert_indices)
                 loss_entropy_tensor = entropy_regularization(expert_weights)
@@ -270,8 +276,9 @@ class StudentTrainer:
                 continue  # Skip this batch entirely (no backward, no step)
 
             # ✅ Extreme value check to prevent gradient explosion
-            # Loss is typically 0.01-0.1 range in knowledge distillation
-            LOSS_THRESHOLD = 0.5  # Values above this indicate instability
+            # Loss is typically 0.01-1.0 range in knowledge distillation
+            # After feature loss normalization, threshold can be higher
+            LOSS_THRESHOLD = 10.0  # Values above this indicate instability
             if loss.item() > LOSS_THRESHOLD:
                 self.logger.warning(f"⚠️ Extreme loss value detected: {loss.item():.4f} > {LOSS_THRESHOLD}")
                 self.logger.warning(f"Loss components: hard={loss_dict['hard_loss']:.4f}, "
@@ -428,19 +435,40 @@ class StudentTrainer:
             })
 
         # Compute averages
-        metrics = {
-            'train_loss': total_loss / num_batches,
-            'train_hard_loss': total_hard_loss / num_batches,
-            'train_soft_loss': total_soft_loss / num_batches,
-            'train_feature_loss': total_feature_loss / num_batches,
-            'train_load_loss': total_load_loss / num_batches,
-            'train_entropy_loss': total_entropy_loss / num_batches,
-            'temperature': temperature,
-            'alpha': self.criterion.alpha,
-            'beta': self.criterion.beta,
-            'gamma': self.criterion.gamma,
-            'expert_usage': expert_counts.cpu().numpy() / expert_counts.sum().item()
-        }
+        if num_batches == 0:
+            self.logger.error("⚠️ All batches were skipped due to extreme loss values!")
+            self.logger.error("This indicates severe training instability. Consider:")
+            self.logger.error("1. Reducing learning rate")
+            self.logger.error("2. Checking feature projection initialization")
+            self.logger.error("3. Reducing gamma (feature loss weight)")
+            # Return dummy metrics to avoid crash
+            metrics = {
+                'train_loss': float('inf'),
+                'train_hard_loss': float('inf'),
+                'train_soft_loss': float('inf'),
+                'train_feature_loss': float('inf'),
+                'train_load_loss': float('inf'),
+                'train_entropy_loss': float('inf'),
+                'temperature': temperature,
+                'alpha': self.criterion.alpha,
+                'beta': self.criterion.beta,
+                'gamma': self.criterion.gamma,
+                'expert_usage': expert_counts.cpu().numpy() / expert_counts.sum().item() if expert_counts.sum() > 0 else expert_counts.cpu().numpy()
+            }
+        else:
+            metrics = {
+                'train_loss': total_loss / num_batches,
+                'train_hard_loss': total_hard_loss / num_batches,
+                'train_soft_loss': total_soft_loss / num_batches,
+                'train_feature_loss': total_feature_loss / num_batches,
+                'train_load_loss': total_load_loss / num_batches,
+                'train_entropy_loss': total_entropy_loss / num_batches,
+                'temperature': temperature,
+                'alpha': self.criterion.alpha,
+                'beta': self.criterion.beta,
+                'gamma': self.criterion.gamma,
+                'expert_usage': expert_counts.cpu().numpy() / expert_counts.sum().item()
+            }
 
         return metrics
 

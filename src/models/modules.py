@@ -99,6 +99,13 @@ class FeatureProjection(nn.Module):
             nn.Linear(student_dim // 2, teacher_dim)
         )
 
+        # Initialize weights with Xavier/Glorot uniform for stable gradients
+        for m in self.projection:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=0.5)  # Reduced gain for stability
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
     def forward(self, student_features):
         """
         Args:
