@@ -206,7 +206,7 @@ training:
       # Loss Weights（GradNorm用初期値）
       alpha_init: 0.3            # Hard label loss
       beta_init: 0.5             # Soft label loss
-      gamma_init: 0.2            # Feature distillation
+      gamma_init: 0.05           # Feature distillation (reduced for stability)
       delta_load: 0.01           # Load balancing
       delta_entropy: 0.001       # Entropy regularization
 
