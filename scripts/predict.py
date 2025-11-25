@@ -212,15 +212,17 @@ class SpectrumPredictor:
         if len(indices) == 0:
             return []
 
-        intensities = spectrum[indices]
+        intensities = spectrum[mask]
 
-        # Sort by intensity
-        sorted_idx = np.argsort(intensities)[::-1]
+        # Create (m/z, intensity) pairs
+        peaks_with_intensity = list(zip(indices, intensities))
+
+        # Sort by intensity (descending)
+        peaks_with_intensity.sort(key=lambda x: x[1], reverse=True)
 
         # Top N
-        n = min(len(sorted_idx), top_n)
-        peaks = [(int(indices[sorted_idx[i]]), float(intensities[sorted_idx[i]]))
-                 for i in range(n)]
+        n = min(len(peaks_with_intensity), top_n)
+        peaks = [(int(mz), float(intensity)) for mz, intensity in peaks_with_intensity[:n]]
 
         return peaks
 
