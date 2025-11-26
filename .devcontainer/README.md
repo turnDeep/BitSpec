@@ -1,6 +1,6 @@
-# Dev Container での BitSpec 実行方法
+# Dev Container での NExtIMS v2.0 実行方法
 
-このディレクトリには、BitSpec (Mass Spectrum Prediction) プロジェクトをDev Containerで実行するための設定ファイルが含まれています。
+このディレクトリには、NExtIMS v2.0 (Neural EI-MS Prediction with Knowledge Distillation) プロジェクトをDev Containerで実行するための設定ファイルが含まれています。
 
 ## 必要な環境
 
@@ -45,8 +45,11 @@ python3 -c "import rdkit; print('RDKit: OK')"
 # プロジェクトのインストール
 pip3 install -e .
 
-# 10個のサンプルでテストトレーニング
-python3 scripts/test_training.py
+# GPU確認
+python3 -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+
+# 統合トレーニングパイプライン
+python3 scripts/train_pipeline.py --config config.yaml
 ```
 
 ## GPU サポート
@@ -79,7 +82,7 @@ docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 
 ### Docker メモリ不足
 
-Docker Desktopの設定でメモリを増やしてください（推奨: 8GB以上）
+Docker Desktopの設定でメモリを増やしてください（推奨: 16GB以上）
 
 ### GPU が認識されない
 
@@ -89,6 +92,7 @@ nvidia-smi
 
 # PyTorchでGPUを確認
 python3 -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python3 -c "import torch; print(f'CUDA device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
 ```
 
 ### ビルドエラー
@@ -99,59 +103,54 @@ docker system prune -a
 # VS Codeでコマンドパレット > "Remote-Containers: Rebuild Container"
 ```
 
-## 10個のMOLファイルでのテスト
+## NExtIMS v2.0 トレーニング
 
-テストトレーニングスクリプト (`scripts/test_training.py`) は、10個のMOLファイルを使用して以下を実行します：
-
-1. **データセットの作成**: NIST MSPファイルとMOLファイルから最初の10サンプルを読み込み
-2. **モデルの作成**: GCN (Graph Convolutional Network) モデルを構築
-3. **トレーニング**: 5エポックの訓練を実行
-4. **評価**: コサイン類似度などのメトリクスを計算
-5. **保存**: 訓練済みモデルを `checkpoints/test/test_model.pt` に保存
-
-実行方法:
+### 統合パイプライン（推奨）
 
 ```bash
 # Dev Container内で
 cd /workspace
-python3 scripts/test_training.py
+python3 scripts/train_pipeline.py --config config.yaml
 ```
 
-期待される出力:
+このコマンドは以下を自動実行します：
+1. **Phase 1**: PCQM4Mv2データセットでTeacher事前学習（BDE RegressionまたはBond Masking）
+2. **Phase 2**: NIST EI-MSデータでTeacherをファインチューニング（MC Dropout使用）
+3. **Phase 3**: TeacherからStudentへの知識蒸留（Uncertainty-Aware KD）
+
+### 個別ステップの実行
+
+```bash
+# Phase 0: BDE事前計算（BDE Regression使用時のみ）
+python3 scripts/precompute_bde.py --max-samples 500000
+
+# Phase 1: Teacher事前学習
+python3 scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain
+
+# Phase 2: Teacherファインチューニング
+python3 scripts/train_teacher.py --config config.yaml --phase finetune \
+    --pretrained checkpoints/teacher/best_pretrain_teacher.pt
+
+# Phase 3: Student蒸留
+python3 scripts/train_student.py --config config.yaml \
+    --teacher checkpoints/teacher/best_finetune_teacher.pt
 ```
-============================================================
-10個のMOLファイルを使用したテストトレーニング
-============================================================
-使用デバイス: cuda:0 (または cpu)
-CUDA デバイス: NVIDIA RTX 5090
 
-1. データセットの作成
-------------------------------------------------------------
-全データ数: 900 サンプル
-テスト用サンプル数: 10
-  訓練データ: 8
-  検証データ: 1
-  テストデータ: 1
-  訓練バッチ数: 4
-  検証バッチ数: 1
+### 予測の実行
 
-2. モデルの作成
-------------------------------------------------------------
-  ノード特徴量次元: 155
-  エッジ特徴量次元: 15
-  総パラメータ数: 1,234,567
-  訓練可能パラメータ数: 1,234,567
+```bash
+# 単一分子予測（Student：高速）
+python3 scripts/predict.py \
+    --config config.yaml \
+    --checkpoint checkpoints/student/best_student.pt \
+    --smiles "CC(=O)OC1=CC=CC=C1C(=O)O"
 
-3. 訓練設定
-------------------------------------------------------------
-  損失関数: SpectrumLoss (combined)
-  オプティマイザ: Adam
-  学習率: 0.001
-
-4. トレーニング開始
-------------------------------------------------------------
-Epoch 1/5 [Train]: 100%|██████████| 4/4 [00:05<00:00, loss=0.8234, cos_sim=0.1234]
-...
+# 不確実性推定付き予測（Teacher）
+python3 scripts/predict.py \
+    --config config.yaml \
+    --checkpoint checkpoints/teacher/best_finetune_teacher.pt \
+    --model teacher \
+    --smiles "CC(=O)OC1=CC=CC=C1C(=O)O"
 ```
 
 ## ファイル構成
@@ -184,8 +183,31 @@ RUN pip3 install --no-cache-dir your-package-name
 ]
 ```
 
+## プロジェクト特徴
+
+### NExtIMS v2.0 の主な特徴
+
+- **Teacher-Student Knowledge Distillation**: GNN+ECFP HybridのTeacherから軽量MoE Studentへの知識転移
+- **BDE Regression Pretraining**: Bond Dissociation Energy（結合解離エネルギー）を学習タスクとして使用
+- **Mixture of Experts (MoE)**: 4つの専門家ネットワーク（芳香族、脂肪族、複素環、一般）
+- **Uncertainty-Aware Distillation**: MC Dropoutによる不確実性を考慮した知識蒸留
+- **RTX 5070 Ti最適化**: 16GB VRAMに最適化、Mixed Precision Training対応
+- **メモリ効率的データローディング**: 32GB RAMでNIST17全データ（30万化合物）対応
+
+### 性能目標
+
+| メトリック | NEIMS v1.0 | NExtIMS v2.0 (目標) | 改善率 |
+|--------|------------|------------------|-------|
+| Recall@10 | 91.8% | 95.5-96.0% | +3.7-4.2% |
+| Recall@5 | ~85% | 90-91% | +5-6% |
+| 推論速度 | 5ms | 8-12ms | 1.6-2.4x遅 |
+| GPU要件 | 不要 | 不要（推論時） | 同等 |
+
 ## 参考資料
 
 - [Visual Studio Code Dev Containers](https://code.visualstudio.com/docs/devcontainers/containers)
 - [Docker Documentation](https://docs.docker.com/)
 - [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-docker)
+- [NExtIMS v2.0 README](../README.md)
+- [システム仕様書](../docs/NEIMS_v2_SYSTEM_SPECIFICATION.md)
+- [BDE事前学習ガイド](../docs/BDE_PRETRAINING_IMPLEMENTATION_GUIDE.md)
