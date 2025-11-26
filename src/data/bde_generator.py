@@ -6,11 +6,17 @@ NEIMS v2.0 BDE (Bond Dissociation Energy) Generator
 Uses ALFABET (A machine-Learning derived, Fast, Accurate Bond dissociation Enthalpy Tool)
 to generate BDE values for pretraining.
 
+Phase 0 Integration:
+- Prefers HDF5 cache created by scripts/precompute_bde.py
+- Falls back to direct ALFABET prediction if cache miss
+- Supports both Phase 0 workflow (HDF5) and legacy workflow (direct ALFABET)
+
 ALFABET: https://github.com/NREL/alfabet
 Paper: https://www.nature.com/articles/s41467-020-16201-z
 Dataset: 290,664 BDEs from 42,577 molecules (C, H, O, N only)
 """
 
+import os
 import torch
 import numpy as np
 from rdkit import Chem
@@ -21,9 +27,17 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Try to import ALFABET
+# Try to import HDF5
 try:
-    from alfabet import BDEPredictor as ALFABETPredictor
+    import h5py
+    HDF5_AVAILABLE = True
+except ImportError:
+    HDF5_AVAILABLE = False
+    logger.warning("h5py not available. Install with: pip install h5py")
+
+# Try to import ALFABET (only needed if not using Phase 0 HDF5 cache)
+try:
+    from alfabet import model as alfabet_model
     ALFABET_AVAILABLE = True
     logger.info("ALFABET successfully imported")
 except ImportError:
@@ -38,6 +52,11 @@ class BDEGenerator:
     Generates BDE values for all bonds in a molecule for use in pretraining.
     BDE values are normalized to [0, 1] range for neural network training.
 
+    Phase 0 Integration:
+    - Prefers HDF5 cache (data/processed/bde_cache/bde_cache.h5) from Phase 0
+    - Falls back to direct ALFABET prediction if cache miss
+    - Most efficient: Run Phase 0 once, then use HDF5 cache for all training
+
     QC-GN2oMS2 Comparison:
     - QC-GN2oMS2: Uses BDE as static edge features
     - NExtIMS v2.0: Uses BDE as pretraining task target (this class)
@@ -47,51 +66,79 @@ class BDEGenerator:
         self,
         cache_dir: Optional[str] = None,
         use_cache: bool = True,
+        use_hdf5: bool = True,  # NEW: Use HDF5 cache from Phase 0
         bde_min: float = 50.0,   # Typical minimum BDE (kcal/mol)
         bde_max: float = 120.0,  # Typical maximum BDE (kcal/mol)
         fallback_bde: float = 85.0  # Default BDE if ALFABET fails
     ):
         """
         Args:
-            cache_dir: Directory to cache computed BDEs
+            cache_dir: Directory containing BDE cache
             use_cache: Whether to use cached BDEs
+            use_hdf5: Whether to use HDF5 cache from Phase 0 (recommended)
             bde_min: Minimum BDE for normalization (kcal/mol)
             bde_max: Maximum BDE for normalization (kcal/mol)
             fallback_bde: Fallback BDE value if prediction fails
         """
         self.use_cache = use_cache
+        self.use_hdf5 = use_hdf5
         self.bde_min = bde_min
         self.bde_max = bde_max
         self.fallback_bde = fallback_bde
 
-        # Setup cache
+        # Setup cache directory
         if cache_dir:
             self.cache_dir = Path(cache_dir)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            self.cache_file = self.cache_dir / "bde_cache.pkl"
+        else:
+            self.cache_dir = Path("data/processed/bde_cache")
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-            # Load existing cache
-            if self.use_cache and self.cache_file.exists():
+        # Try to load HDF5 cache (from Phase 0)
+        self.hdf5_file = None
+        self.hdf5_cache_loaded = False
+        if self.use_hdf5 and HDF5_AVAILABLE:
+            hdf5_path = self.cache_dir / "bde_cache.h5"
+            if hdf5_path.exists():
+                try:
+                    self.hdf5_file = h5py.File(str(hdf5_path), 'r')
+                    num_molecules = self.hdf5_file.attrs.get('num_molecules', len(self.hdf5_file))
+                    num_bde_values = self.hdf5_file.attrs.get('num_bde_values', 0)
+                    logger.info(f"Loaded HDF5 BDE cache: {num_molecules:,} molecules, {num_bde_values:,} BDE values")
+                    logger.info(f"  Cache file: {hdf5_path}")
+                    self.hdf5_cache_loaded = True
+                except Exception as e:
+                    logger.warning(f"Failed to load HDF5 cache: {e}")
+                    self.hdf5_file = None
+            else:
+                logger.info(f"HDF5 cache not found at {hdf5_path}")
+                logger.info("Run Phase 0 to create cache: python scripts/precompute_bde.py")
+
+        # Legacy pickle cache (fallback)
+        self.cache_file = self.cache_dir / "bde_cache.pkl"
+        if self.use_cache and self.cache_file.exists() and not self.hdf5_cache_loaded:
+            try:
                 with open(self.cache_file, 'rb') as f:
                     self.cache = pickle.load(f)
-                logger.info(f"Loaded BDE cache with {len(self.cache)} entries")
-            else:
+                logger.info(f"Loaded pickle BDE cache with {len(self.cache)} entries")
+            except Exception as e:
+                logger.warning(f"Failed to load pickle cache: {e}")
                 self.cache = {}
         else:
-            self.cache_dir = None
             self.cache = {}
 
-        # Initialize ALFABET predictor
-        if ALFABET_AVAILABLE:
+        # Initialize ALFABET predictor (only if not using HDF5 cache)
+        self.predictor = None
+        if not self.hdf5_cache_loaded and ALFABET_AVAILABLE:
             try:
-                self.predictor = ALFABETPredictor()
+                # ALFABET uses a singleton model, just import it
+                self.predictor = alfabet_model
                 logger.info("ALFABET predictor initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize ALFABET: {e}")
                 logger.warning("Falling back to rule-based BDE estimation")
                 self.predictor = None
-        else:
-            self.predictor = None
+        elif not self.hdf5_cache_loaded:
             logger.warning("ALFABET not available, using rule-based BDE estimation")
 
     def normalize_bde(self, bde: float) -> float:
@@ -106,6 +153,12 @@ class BDEGenerator:
         """
         Predict BDE for all bonds in molecule
 
+        Priority:
+        1. HDF5 cache (from Phase 0) - fastest
+        2. Pickle cache (legacy) - fast
+        3. ALFABET direct prediction - slow
+        4. Rule-based estimation - fallback
+
         Args:
             mol: RDKit molecule
             use_cache: Whether to use cached results
@@ -116,21 +169,41 @@ class BDEGenerator:
         # Generate cache key from SMILES
         smiles = Chem.MolToSmiles(mol)
 
-        # Check cache
+        # Priority 1: Check HDF5 cache (Phase 0)
+        if use_cache and self.use_cache and self.hdf5_file is not None:
+            if smiles in self.hdf5_file:
+                try:
+                    bde_group = self.hdf5_file[smiles]
+                    bde_dict = {}
+                    for bond_idx_str in bde_group.keys():
+                        bond_idx = int(bond_idx_str)
+                        bde_value = float(bde_group[bond_idx_str][()])
+                        bde_dict[bond_idx] = bde_value
+                    return bde_dict
+                except Exception as e:
+                    logger.warning(f"Failed to read from HDF5 cache: {e}")
+
+        # Priority 2: Check pickle cache (legacy)
         if use_cache and self.use_cache and smiles in self.cache:
             return self.cache[smiles]
 
-        # Predict BDE
+        # Priority 3: ALFABET direct prediction
         if self.predictor is not None:
             try:
-                # ALFABET prediction
-                bde_dict = self.predictor.predict(mol)
+                # ALFABET expects a list of SMILES
+                predictions = self.predictor.predict([smiles])
+                if predictions and len(predictions) > 0:
+                    bde_dict = predictions[0]
+                    if bde_dict:
+                        # Cache result in pickle
+                        if self.use_cache:
+                            self.cache[smiles] = bde_dict
+                        return bde_dict
             except Exception as e:
                 logger.debug(f"ALFABET prediction failed: {e}, using rule-based estimation")
-                bde_dict = self._rule_based_bde(mol)
-        else:
-            # Rule-based estimation
-            bde_dict = self._rule_based_bde(mol)
+
+        # Priority 4: Rule-based estimation (fallback)
+        bde_dict = self._rule_based_bde(mol)
 
         # Cache result
         if self.use_cache:
@@ -239,7 +312,15 @@ class BDEGenerator:
             logger.info(f"Saved BDE cache with {len(self.cache)} entries")
 
     def __del__(self):
-        """Destructor: save cache on cleanup"""
+        """Destructor: save cache on cleanup and close HDF5"""
+        # Close HDF5 file
+        if hasattr(self, 'hdf5_file') and self.hdf5_file is not None:
+            try:
+                self.hdf5_file.close()
+            except Exception:
+                pass
+
+        # Save pickle cache
         if hasattr(self, 'cache_dir') and self.cache_dir:
             self.save_cache()
 

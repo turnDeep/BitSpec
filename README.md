@@ -138,6 +138,7 @@ BitSpec/
 │       ├── chemistry.py          # RDKitユーティリティ
 │       └── rtx50_compat.py       # RTX 50互換性
 └── scripts/
+    ├── precompute_bde.py         # 🆕 Phase 0: BDE事前計算（ALFABET）
     ├── train_teacher.py          # Teacher学習（Phase 1-2）
     ├── train_student.py          # Student蒸留（Phase 3）
     ├── train_pipeline.py         # 統合パイプライン ★推奨★
@@ -271,11 +272,44 @@ python scripts/benchmark_memory.py --mode compare --max_samples 300000
 
 統合パイプラインの代わりに、各段階を個別に実行することも可能です:
 
+#### Phase 0: BDE事前計算（🆕 BDE Regression使用時のみ）
+
+**BDE Regressionを使用する場合、Phase 1の前に一度だけ実行:**
+
+```bash
+# TensorFlow依存関係のインストール（Phase 0のみ必要）
+pip install -r requirements-phase0.txt
+
+# サブセット（50万分子、20-30分 on CPU）- 推奨
+python scripts/precompute_bde.py --max-samples 500000
+
+# 全データ（3.74M分子、2-3時間 on CPU）- 最高性能重視
+python scripts/precompute_bde.py --max-samples 0
+```
+
+**Phase 0で生成されるもの:**
+- **BDEデータベース**: `data/processed/bde_cache/bde_cache.h5`
+- **規模**: サブセット（1,250万BDE値、~100MB）、全データ（9,350万BDE値、~750MB）
+- **用途**: Phase 1訓練時にBDE値を高速読み込み（TensorFlow不要）
+
+**重要**: RTX 5070 Ti（sm_120）はTensorFlow 2.xで限定的サポート。**CPU実行を推奨**（十分に高速）。
+
+**Phase 0完了後:**
+```bash
+# TensorFlowをアンインストール可能（Phase 1-3はPyTorchのみ）
+pip uninstall tensorflow alfabet
+```
+
+**💡 詳細**: Phase 0は巨大なBDEデータベース（史上最大規模、既存の176倍）を副産物として生成します。
+
+---
+
 #### Phase 1: Teacher事前学習（PCQM4Mv2）
 
 **🆕 BDE Regression（推奨）:**
 
 ```bash
+# Phase 0で作成したHDF5キャッシュを使用
 # サブセット（50万分子、16時間）- 推奨
 python scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain
 
@@ -916,13 +950,20 @@ MIT License
 
 ## 更新履歴
 
-- **v2.0.2** (2025-11-26): 🆕 BDE Regression事前学習実装
+- **v2.0.2** (2025-11-26): 🆕 BDE Regression事前学習実装 + Phase 0
   - **BDE Regression Pretraining**: Bond Dissociation Energy（結合解離エネルギー）を学習タスクとして使用
     - ALFABET統合: BDE値を自動生成（290,664 BDEsから学習）
     - QC-GN2oMS2との差別化: BDEを学習タスクとして活用（静的特徴量ではない）
     - 訓練時間最適化: サブセット（50万分子）で16時間、全データ（3.74M）で3.5日
+  - **🆕 Phase 0（BDE事前計算）**: PCQM4Mv2全分子のBDE値を一括計算してHDF5データベース化
+    - TensorFlow/ALFABET使用（CPU推論、20分～3時間）
+    - 史上最大規模のBDEデータベース（9,350万BDE値、既存の176倍）
+    - Phase 1以降はPyTorchのみ（TensorFlow不要）、HDF5から高速読み込み
+    - RTX 5070 Ti（sm_120）のTensorFlow限定サポートに対応
   - **新規ファイル**:
-    - `src/data/bde_generator.py`: ALFABET BDE生成器（キャッシング対応）
+    - `scripts/precompute_bde.py`: Phase 0実装（BDE一括計算、HDF5保存）
+    - `requirements-phase0.txt`: Phase 0専用依存関係（TensorFlow, ALFABET）
+    - `src/data/bde_generator.py`: HDF5キャッシュ対応BDE生成器
     - `docs/BDE_PRETRAINING_IMPLEMENTATION_GUIDE.md`: 完全実装ガイド（765行）
     - `docs/PCQM4Mv2_TRAINING_TIME_ESTIMATE.md`: 訓練時間詳細見積もり
   - **更新ファイル**:
@@ -930,7 +971,7 @@ MIT License
     - `src/models/teacher.py`: BDE予測ヘッド追加
     - `src/training/losses.py`: BDE回帰損失追加
     - `src/training/teacher_trainer.py`: BDE訓練ループ実装
-  - **推奨構成**: PCQM4Mv2サブセット（50万分子）で16時間訓練、Recall@10 96.0%達成見込み
+  - **推奨構成**: Phase 0（30分）→ Phase 1サブセット訓練（16時間）、Recall@10 96.0%達成見込み
 
 - **v2.0.1** (2025-11-20): 完全データセット統合とトレーニングパイプライン実装
   - **データセットローダー完全実装**:
