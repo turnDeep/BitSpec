@@ -9,6 +9,14 @@ to generate BDE values for pretraining.
 ALFABET: https://github.com/NREL/alfabet
 Paper: https://www.nature.com/articles/s41467-020-16201-z
 Dataset: 290,664 BDEs from 42,577 molecules (C, H, O, N only)
+
+Installation:
+    pip install alfabet
+
+Auto-Download:
+    ALFABET model weights (~50MB) are automatically downloaded from
+    https://github.com/pstjohn/alfabet-models/releases on first use.
+    The model files are cached in your home directory for future use.
 """
 
 import torch
@@ -23,12 +31,17 @@ logger = logging.getLogger(__name__)
 
 # Try to import ALFABET
 try:
-    from alfabet import BDEPredictor as ALFABETPredictor
+    from alfabet import model as alfabet_model
     ALFABET_AVAILABLE = True
     logger.info("ALFABET successfully imported")
 except ImportError:
     ALFABET_AVAILABLE = False
+    alfabet_model = None
     logger.warning("ALFABET not available. Install with: pip install alfabet")
+except Exception as e:
+    ALFABET_AVAILABLE = False
+    alfabet_model = None
+    logger.warning(f"ALFABET import failed: {e}. Install with: pip install alfabet")
 
 
 class BDEGenerator:
@@ -81,17 +94,19 @@ class BDEGenerator:
             self.cache_dir = None
             self.cache = {}
 
-        # Initialize ALFABET predictor
-        if ALFABET_AVAILABLE:
+        # Initialize ALFABET model reference
+        if ALFABET_AVAILABLE and alfabet_model is not None:
             try:
-                self.predictor = ALFABETPredictor()
-                logger.info("ALFABET predictor initialized successfully")
+                # ALFABET model is ready to use after import
+                # Model weights are automatically downloaded on first use
+                self.use_alfabet = True
+                logger.info("ALFABET model ready for predictions")
             except Exception as e:
                 logger.error(f"Failed to initialize ALFABET: {e}")
                 logger.warning("Falling back to rule-based BDE estimation")
-                self.predictor = None
+                self.use_alfabet = False
         else:
-            self.predictor = None
+            self.use_alfabet = False
             logger.warning("ALFABET not available, using rule-based BDE estimation")
 
     def normalize_bde(self, bde: float) -> float:
@@ -121,10 +136,31 @@ class BDEGenerator:
             return self.cache[smiles]
 
         # Predict BDE
-        if self.predictor is not None:
+        if self.use_alfabet and alfabet_model is not None:
             try:
                 # ALFABET prediction
-                bde_dict = self.predictor.predict(mol)
+                # alfabet.model.predict() expects a list of SMILES strings
+                # Returns DataFrame with columns: molecule, bond_index, bond_type,
+                # fragment1, fragment2, bde_pred, is_valid
+                predictions = alfabet_model.predict([smiles], verbose=False)
+
+                # Convert DataFrame to dict {bond_idx: BDE}
+                bde_dict = {}
+                for _, row in predictions.iterrows():
+                    if row['is_valid']:
+                        bond_idx = int(row['bond_index'])
+                        bde_value = float(row['bde_pred'])
+                        bde_dict[bond_idx] = bde_value
+                    else:
+                        # Use fallback for invalid predictions
+                        bond_idx = int(row['bond_index'])
+                        bde_dict[bond_idx] = self.fallback_bde
+
+                # If no valid predictions, fall back to rule-based
+                if not bde_dict:
+                    logger.debug(f"No valid ALFABET predictions for {smiles}, using rule-based estimation")
+                    bde_dict = self._rule_based_bde(mol)
+
             except Exception as e:
                 logger.debug(f"ALFABET prediction failed: {e}, using rule-based estimation")
                 bde_dict = self._rule_based_bde(mol)

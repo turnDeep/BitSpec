@@ -77,6 +77,8 @@ pip install -r requirements.txt
 pip install ogb>=1.3.6
 
 # ALFABET（BDE予測ツール、事前学習用）
+# モデルファイルは初回使用時に自動ダウンロードされます（~50MB）
+# ダウンロード元: https://github.com/pstjohn/alfabet-models/releases
 pip install alfabet
 
 # パッケージのインストール
