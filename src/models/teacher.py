@@ -241,12 +241,28 @@ class TeacherModel(nn.Module):
                 node_dim=gnn_cfg['hidden_dim'],
                 edge_dim=gnn_cfg['edge_dim']
             )
-            # Bond feature prediction head for pretraining
+            # Bond feature prediction head for pretraining (Bond Masking)
             # Predicts: bond_type, is_conjugated, is_aromatic, is_in_ring
             self.bond_feature_head = nn.Sequential(
                 nn.Linear(1, 16),
                 nn.ReLU(),
                 nn.Linear(16, 4)
+            )
+
+            # BDE prediction head for pretraining (NEW)
+            # Predicts: BDE value (1 scalar) from bond-breaking attention
+            # QC-GN2oMS2 vs NExtIMS v2.0:
+            # - QC-GN2oMS2: BDE as input feature (static)
+            # - NExtIMS v2.0: BDE learned via regression (THIS HEAD)
+            self.bde_prediction_head = nn.Sequential(
+                nn.Linear(2 * gnn_cfg['hidden_dim'] + gnn_cfg['edge_dim'], 256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(128, 1),  # Output: single BDE value per edge
+                nn.Sigmoid()  # Normalized to [0, 1]
             )
 
         # ECFP Branch
@@ -286,7 +302,7 @@ class TeacherModel(nn.Module):
         self.mc_samples = mc_cfg['n_samples']
         self.mc_dropout_rate = mc_cfg['dropout_rate']
 
-    def forward(self, graph_data, ecfp, dropout=False, return_bond_predictions=False):
+    def forward(self, graph_data, ecfp, dropout=False, return_bond_predictions=False, return_bde_predictions=False):
         """
         Forward pass
 
@@ -294,14 +310,18 @@ class TeacherModel(nn.Module):
             graph_data: PyG Data object with x, edge_index, edge_attr, batch
             ecfp: ECFP4 fingerprint [batch_size, 4096]
             dropout: Whether to apply dropout (for MC Dropout)
-            return_bond_predictions: Whether to return bond predictions (for pretraining)
+            return_bond_predictions: Whether to return bond predictions (for Bond Masking pretraining)
+            return_bde_predictions: Whether to return BDE predictions (for BDE Regression pretraining, NEW)
 
         Returns:
             spectrum: Predicted spectrum [batch_size, output_dim]
-            bond_predictions: Bond masking predictions [num_masked_bonds, 4] (optional)
+            bond_predictions: Bond masking predictions [num_masked_bonds, 4] (optional, Bond Masking)
+            bde_predictions: BDE predictions [num_edges, 1] (optional, BDE Regression, NEW)
         """
         # GNN Branch
-        if return_bond_predictions and self.use_bond_breaking:
+        need_node_features = (return_bond_predictions or return_bde_predictions) and self.use_bond_breaking
+
+        if need_node_features:
             gnn_emb, node_features, edge_index_processed, edge_attr_emb, edge_mask = self.gnn_branch(
                 graph_data.x,
                 graph_data.edge_index,
@@ -365,6 +385,31 @@ class TeacherModel(nn.Module):
                 graph_data.valid_bond_mask = valid_bond_mask
 
             return spectrum, bond_predictions
+
+        # BDE predictions (for BDE Regression pretraining, NEW)
+        if return_bde_predictions and self.use_bond_breaking:
+            # Compute edge-level features for BDE prediction
+            row, col = edge_index_processed
+            node_i = node_features[row]  # [E', hidden_dim]
+            node_j = node_features[col]  # [E', hidden_dim]
+
+            # Concatenate: [node_i | node_j | edge_attr]
+            edge_features = torch.cat([node_i, node_j, edge_attr_emb], dim=-1)
+            # [E', 2*hidden_dim + edge_dim]
+
+            # Predict BDE for all edges (not just masked)
+            bde_predictions = self.bde_prediction_head(edge_features)  # [E', 1]
+
+            # QC-GN2oMS2 vs NExtIMS v2.0 Comparison:
+            # QC-GN2oMS2: BDE is an INPUT feature (static, precomputed)
+            # NExtIMS v2.0: BDE is PREDICTED (dynamic, learned)
+            #
+            # This allows the model to:
+            # 1. Learn chemical patterns that determine BDE
+            # 2. Generalize better to new molecules
+            # 3. Capture complex interactions missed by ALFABET
+
+            return spectrum, bde_predictions
 
         return spectrum
 
