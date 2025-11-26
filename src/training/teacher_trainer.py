@@ -62,10 +62,25 @@ class TeacherTrainer:
         else:  # finetune
             self.train_config = config['training']['teacher_finetune']
 
-        # Loss function
-        lambda_bond = self.train_config.get('bond_masking', {}).get('lambda_bond', 0.1) \
-                      if phase == 'pretrain' else 0.0
-        self.criterion = TeacherLoss(lambda_bond=lambda_bond)
+        # Loss function (BDE-aware)
+        if phase == 'pretrain':
+            # Determine pretraining task type
+            self.pretrain_task = self.train_config.get('pretrain_task', 'bde')  # 'bde' or 'bond_masking'
+
+            if self.pretrain_task == 'bde':
+                # BDE Regression pretraining (NEW)
+                lambda_bde = self.train_config.get('lambda_bde', 1.0)
+                self.criterion = TeacherLoss(lambda_bde=lambda_bde)
+                self.logger.info(f"Pretraining with BDE Regression (lambda_bde={lambda_bde})")
+            else:
+                # Bond Masking pretraining (original)
+                lambda_bond = self.train_config.get('bond_masking', {}).get('lambda_bond', 0.1)
+                self.criterion = TeacherLoss(lambda_bond=lambda_bond)
+                self.logger.info(f"Pretraining with Bond Masking (lambda_bond={lambda_bond})")
+        else:
+            # Finetuning: spectrum prediction only
+            self.criterion = TeacherLoss()
+            self.pretrain_task = None
 
         # Optimizer
         self.optimizer = self._setup_optimizer()
@@ -173,6 +188,8 @@ class TeacherTrainer:
         """
         Train for one epoch
 
+        Supports both BDE Regression and Bond Masking pretraining tasks.
+
         Returns:
             metrics: Dictionary of training metrics
         """
@@ -181,6 +198,8 @@ class TeacherTrainer:
         total_loss = 0.0
         total_spectrum_loss = 0.0
         total_bond_loss = 0.0
+        total_bde_loss = 0.0
+        total_bde_mae = 0.0
         num_batches = 0
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
@@ -190,17 +209,23 @@ class TeacherTrainer:
             graph_data = batch['graph'].to(self.device)
             ecfp = batch['ecfp'].to(self.device)
 
-            # Handle different phases
+            # Initialize prediction/target variables
             bond_predictions = None
             bond_targets = None
+            bde_predictions = None
+            bde_targets = None
 
             if self.phase == 'pretrain':
-                # Pretraining: Use dummy spectrum (all zeros) since we focus on bond masking
+                # Pretraining: Use dummy spectrum (all zeros)
                 batch_size = ecfp.size(0)
                 target_spectrum = torch.zeros((batch_size, 501), device=self.device)
 
-                # Bond targets for pretraining
-                if 'mask_targets' in batch:
+                # Check which pretraining task we're using
+                if 'bde_targets' in batch:
+                    # BDE Regression task (NEW)
+                    bde_targets = batch['bde_targets'].to(self.device)
+                elif 'mask_targets' in batch:
+                    # Bond Masking task (original)
                     bond_targets = batch['mask_targets'].to(self.device)
             else:
                 # Finetuning: Use actual spectrum
@@ -208,9 +233,26 @@ class TeacherTrainer:
 
             # Forward pass with mixed precision
             with autocast('cuda', enabled=self.use_amp):
-                # Model forward with bond predictions for pretraining
-                if self.phase == 'pretrain' and bond_targets is not None:
-                    model_output = self.model(graph_data, ecfp, dropout=True, return_bond_predictions=True)
+                # BDE Regression pretraining (NEW)
+                if self.phase == 'pretrain' and bde_targets is not None:
+                    model_output = self.model(
+                        graph_data, ecfp,
+                        dropout=True,
+                        return_bde_predictions=True
+                    )
+                    if isinstance(model_output, tuple):
+                        predicted_spectrum, bde_predictions = model_output
+                    else:
+                        predicted_spectrum = model_output
+                        bde_predictions = None
+
+                # Bond Masking pretraining (original)
+                elif self.phase == 'pretrain' and bond_targets is not None:
+                    model_output = self.model(
+                        graph_data, ecfp,
+                        dropout=True,
+                        return_bond_predictions=True
+                    )
                     if isinstance(model_output, tuple):
                         predicted_spectrum, bond_predictions = model_output
                     else:
@@ -220,6 +262,8 @@ class TeacherTrainer:
                     # Filter bond_targets to match bond_predictions after DropEdge
                     if bond_predictions is not None and hasattr(graph_data, 'valid_bond_mask'):
                         bond_targets = bond_targets[graph_data.valid_bond_mask]
+
+                # Finetuning or no special task
                 else:
                     predicted_spectrum = self.model(graph_data, ecfp, dropout=True)
 
@@ -227,8 +271,10 @@ class TeacherTrainer:
                 loss, loss_dict = self.criterion(
                     predicted_spectrum,
                     target_spectrum,
-                    bond_predictions,
-                    bond_targets
+                    bond_predictions=bond_predictions,
+                    bond_targets=bond_targets,
+                    bde_predictions=bde_predictions,
+                    bde_targets=bde_targets
                 )
 
             # Backward pass
@@ -256,13 +302,23 @@ class TeacherTrainer:
             total_spectrum_loss += loss_dict['spectrum_loss']
             if 'bond_loss' in loss_dict:
                 total_bond_loss += loss_dict['bond_loss']
+            if 'bde_loss' in loss_dict:
+                total_bde_loss += loss_dict['bde_loss']
+            if 'bde_mae' in loss_dict:
+                total_bde_mae += loss_dict['bde_mae']
             num_batches += 1
 
             # Update progress bar
-            pbar.set_postfix({
+            postfix_dict = {
                 'loss': f"{loss_dict['total_loss']:.4f}",
                 'spec': f"{loss_dict['spectrum_loss']:.4f}"
-            })
+            }
+            if 'bde_loss' in loss_dict:
+                postfix_dict['bde'] = f"{loss_dict['bde_loss']:.4f}"
+            if 'bde_mae' in loss_dict:
+                postfix_dict['mae'] = f"{loss_dict['bde_mae']:.4f}"
+
+            pbar.set_postfix(postfix_dict)
 
         # Scheduler step
         if self.scheduler is not None:
@@ -275,7 +331,11 @@ class TeacherTrainer:
         }
 
         if self.phase == 'pretrain':
-            metrics['train_bond_loss'] = total_bond_loss / num_batches
+            if self.pretrain_task == 'bde':
+                metrics['train_bde_loss'] = total_bde_loss / num_batches
+                metrics['train_bde_mae'] = total_bde_mae / num_batches
+            else:
+                metrics['train_bond_loss'] = total_bond_loss / num_batches
 
         return metrics
 
@@ -287,6 +347,8 @@ class TeacherTrainer:
     ) -> Dict[str, float]:
         """
         Validate model
+
+        Supports both BDE Regression and Bond Masking pretraining tasks.
 
         Args:
             val_loader: Validation data loader
@@ -300,24 +362,31 @@ class TeacherTrainer:
         total_loss = 0.0
         total_spectrum_loss = 0.0
         total_bond_loss = 0.0
+        total_bde_loss = 0.0
+        total_bde_mae = 0.0
         num_batches = 0
 
         for batch in tqdm(val_loader, desc="Validation"):
             graph_data = batch['graph'].to(self.device)
             ecfp = batch['ecfp'].to(self.device)
 
-            # Handle different phases
+            # Initialize prediction/target variables
             bond_predictions = None
             bond_targets = None
+            bde_predictions = None
+            bde_targets = None
 
             if self.phase == 'pretrain':
-                # Pretraining: Focus on bond masking task
-                # Use dummy spectrum (zeros) since we only care about bond loss
+                # Pretraining: Use dummy spectrum (zeros)
                 batch_size = ecfp.size(0)
                 target_spectrum = torch.zeros((batch_size, 501), device=self.device)
 
-                # Bond targets for validation
-                if 'mask_targets' in batch:
+                # Check which pretraining task we're using
+                if 'bde_targets' in batch:
+                    # BDE Regression task (NEW)
+                    bde_targets = batch['bde_targets'].to(self.device)
+                elif 'mask_targets' in batch:
+                    # Bond Masking task (original)
                     bond_targets = batch['mask_targets'].to(self.device)
             else:
                 # Finetuning: Use actual spectrum
@@ -332,9 +401,26 @@ class TeacherTrainer:
                     )
                 else:
                     # Standard forward pass
-                    if self.phase == 'pretrain' and bond_targets is not None:
-                        # Return bond predictions for validation
-                        model_output = self.model(graph_data, ecfp, dropout=False, return_bond_predictions=True)
+                    # BDE Regression pretraining (NEW)
+                    if self.phase == 'pretrain' and bde_targets is not None:
+                        model_output = self.model(
+                            graph_data, ecfp,
+                            dropout=False,
+                            return_bde_predictions=True
+                        )
+                        if isinstance(model_output, tuple):
+                            predicted_spectrum, bde_predictions = model_output
+                        else:
+                            predicted_spectrum = model_output
+                            bde_predictions = None
+
+                    # Bond Masking pretraining (original)
+                    elif self.phase == 'pretrain' and bond_targets is not None:
+                        model_output = self.model(
+                            graph_data, ecfp,
+                            dropout=False,
+                            return_bond_predictions=True
+                        )
                         if isinstance(model_output, tuple):
                             predicted_spectrum, bond_predictions = model_output
                         else:
@@ -344,6 +430,8 @@ class TeacherTrainer:
                         # Filter bond_targets to match bond_predictions
                         if bond_predictions is not None and hasattr(graph_data, 'valid_bond_mask'):
                             bond_targets = bond_targets[graph_data.valid_bond_mask]
+
+                    # Finetuning or no special task
                     else:
                         predicted_spectrum = self.model(graph_data, ecfp, dropout=False)
 
@@ -351,25 +439,37 @@ class TeacherTrainer:
                 loss, loss_dict = self.criterion(
                     predicted_spectrum,
                     target_spectrum,
-                    bond_predictions,
-                    bond_targets
+                    bond_predictions=bond_predictions,
+                    bond_targets=bond_targets,
+                    bde_predictions=bde_predictions,
+                    bde_targets=bde_targets
                 )
 
             total_loss += loss_dict['total_loss']
             total_spectrum_loss += loss_dict['spectrum_loss']
             if 'bond_loss' in loss_dict:
                 total_bond_loss += loss_dict['bond_loss']
+            if 'bde_loss' in loss_dict:
+                total_bde_loss += loss_dict['bde_loss']
+            if 'bde_mae' in loss_dict:
+                total_bde_mae += loss_dict['bde_mae']
             num_batches += 1
 
         metrics = {
             'val_spectrum_loss': total_spectrum_loss / num_batches,
         }
 
-        # For pretraining, use bond_loss as the primary validation metric
+        # For pretraining, use task-specific loss as primary validation metric
         if self.phase == 'pretrain':
-            metrics['val_bond_loss'] = total_bond_loss / num_batches
-            # Use bond_loss as val_loss for model selection
-            metrics['val_loss'] = metrics['val_bond_loss']
+            if self.pretrain_task == 'bde':
+                metrics['val_bde_loss'] = total_bde_loss / num_batches
+                metrics['val_bde_mae'] = total_bde_mae / num_batches
+                # Use bde_loss as val_loss for model selection
+                metrics['val_loss'] = metrics['val_bde_loss']
+            else:
+                metrics['val_bond_loss'] = total_bond_loss / num_batches
+                # Use bond_loss as val_loss for model selection
+                metrics['val_loss'] = metrics['val_bond_loss']
         else:
             # For finetuning, use spectrum_loss as val_loss
             metrics['val_loss'] = total_loss / num_batches
