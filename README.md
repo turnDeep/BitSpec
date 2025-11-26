@@ -6,6 +6,7 @@ Teacher-Student Knowledge Distillationと Mixture of Experts (MoE)アーキテ�
 ## 特徴
 
 - **Teacher-Student Knowledge Distillation**: 重いTeacherモデル（GNN+ECFP Hybrid）から軽量Studentモデル（MoE-Residual MLP）への知識転移
+- **🆕 BDE Regression Pretraining**: Bond Dissociation Energy（結合解離エネルギー）を学習タスクとして使用し、EI-MSフラグメンテーションパターンに直接関連する分子表現を獲得（QC-GN2oMS2との差別化）
 - **Mixture of Experts (MoE)**: 4つの専門家ネットワーク（芳香族、脂肪族、複素環、一般）による効率的な予測
 - **Uncertainty-Aware Distillation**: MC Dropoutによる不確実性を考慮した知識蒸留
 - **Adaptive Loss Weighting**: GradNormによる自動損失バランシング
@@ -75,6 +76,9 @@ pip install -r requirements.txt
 # OGB (Open Graph Benchmark) ライブラリ（PCQM4Mv2データセット用）
 pip install ogb>=1.3.6
 
+# ALFABET（BDE予測ツール、事前学習用）
+pip install alfabet
+
 # パッケージのインストール
 pip install -e .
 ```
@@ -103,12 +107,15 @@ BitSpec/
 │   └── student/                  # Studentモデル（MoE-Residual MLP）
 │       └── distilled_student.pt        # 知識蒸留済みStudent
 ├── docs/
-│   └── NEIMS_v2_SYSTEM_SPECIFICATION.md  # 完全システム仕様書
+│   ├── NEIMS_v2_SYSTEM_SPECIFICATION.md  # 完全システム仕様書
+│   ├── BDE_PRETRAINING_IMPLEMENTATION_GUIDE.md  # 🆕 BDE事前学習実装ガイド
+│   └── PCQM4Mv2_TRAINING_TIME_ESTIMATE.md  # 🆕 PCQM4Mv2訓練時間見積もり
 ├── src/
 │   ├── data/                     # データ処理
 │   │   ├── nist_dataset.py       # NISTデータセット（Teacher/Studentモード対応）
 │   │   ├── lazy_dataset.py       # 🆕 メモリ効率的遅延ローディング（HDF5 + On-the-Fly）
 │   │   ├── pcqm4m_dataset.py     # PCQM4Mv2データセット（事前学習用）
+│   │   ├── bde_generator.py      # 🆕 BDE生成器（ALFABET統合、事前学習用）
 │   │   ├── preprocessing.py      # データ前処理ユーティリティ
 │   │   ├── augmentation.py       # データ拡張（LDS, Isotope, Conformer）
 │   │   ├── mol_parser.py         # MOL/MSPパーサー（レガシー）
@@ -208,15 +215,21 @@ python scripts/train_pipeline.py --config config.yaml
 ```
 
 このコマンドは以下を自動的に実行します:
-1. **Phase 1**: PCQM4Mv2データセット使用とTeacher事前学習（Bond Masking）
+1. **Phase 1**: PCQM4Mv2データセット使用とTeacher事前学習（**🆕 BDE Regression** または Bond Masking）
    - PCQM4Mv2が未ダウンロードの場合は自動ダウンロード（~8GB、数時間）
+   - **推奨**: BDE Regression（EI-MSフラグメンテーションに直接関連）
 2. **Phase 2**: NIST EI-MSデータでTeacherをファインチューニング（MC Dropout使用）
 3. **Phase 3**: TeacherからStudentへの知識蒸留（Uncertainty-Aware KD）
 
 **推定学習時間（RTX 5070 Ti 16GB）:**
-- Phase 1 (Teacher事前学習): ~3-5日（50エポック）
+- Phase 1 (Teacher事前学習 - BDE Regression):
+  - **サブセット（50万分子、推奨）**: ~16時間（50エポック）
+  - 全データ（3.74M分子）: ~3.5日（35エポック、早期終了）
+  - 全データ完全訓練: ~5日（50エポック）
 - Phase 2 (Teacherファインチューニング): ~12-18時間（100エポック）
 - Phase 3 (Student蒸留): ~8-12時間（150エポック）
+
+**💡 BDE事前学習の詳細**: [BDE_PRETRAINING_IMPLEMENTATION_GUIDE.md](docs/BDE_PRETRAINING_IMPLEMENTATION_GUIDE.md) を参照
 
 **メモリ最適化オプション:**
 
@@ -260,11 +273,29 @@ python scripts/benchmark_memory.py --mode compare --max_samples 300000
 
 #### Phase 1: Teacher事前学習（PCQM4Mv2）
 
+**🆕 BDE Regression（推奨）:**
+
 ```bash
+# サブセット（50万分子、16時間）- 推奨
 python scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain
+
+# 全データ（3.74M分子、3.5-5日）- 最高性能重視
+python scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain --max-samples 0
 ```
 
-このステップでは、GNN+ECFP HybridのTeacherモデルがPCQM4Mv2データセット（3.74M分子）でBond Masking タスクを学習します。
+このステップでは、GNN+ECFP HybridのTeacherモデルがPCQM4Mv2データセット（3.74M分子）で**BDE Regression**タスクを学習します。
+
+**BDE Regressionとは？**
+- 各結合のBond Dissociation Energy（結合解離エネルギー）を予測
+- EI-MSフラグメンテーションパターンに直接関連する分子表現を獲得
+- QC-GN2oMS2との差別化: BDEを静的入力特徴量として使用するのではなく、学習タスクとして活用
+
+**Bond Masking（従来手法）も引き続きサポート:**
+
+```bash
+# config_pretrain.yaml の pretrain_task: 'bond_masking' に変更
+python scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain
+```
 
 #### Phase 2: Teacherファインチューニング（NIST EI-MS）
 
@@ -351,16 +382,31 @@ NEIMS v2.0は、段階的な学習で最高性能を達成します:
 
 #### Phase 1: Teacher事前学習（PCQM4Mv2）
 
+**🆕 BDE Regression（推奨）:**
+
 ```yaml
-目的: ロバストな分子表現の学習
-データセット: PCQM4Mv2（3.74M分子）
-タスク: Bond Masking（自己教師あり学習）
-期間: 50エポック（RTX 5070 Ti: ~3-5日）
+目的: EI-MSフラグメンテーションに関連する分子表現の学習
+データセット: PCQM4Mv2サブセット（50万分子）または 全データ（3.74M分子）
+タスク: BDE Regression（Bond Dissociation Energy予測）
+  - ALFABET（BDE予測ツール）でBDE値を生成
+  - GNNモデルが各結合のBDEを学習（MSE Loss）
+  - QC-GN2oMS2との差別化: BDEを学習タスクとして活用（静的特徴量ではない）
+期間:
+  - サブセット（50万分子）: 50エポック（RTX 5070 Ti: ~16時間）
+  - 全データ（3.74M分子）: 35エポック（RTX 5070 Ti: ~3.5日、早期終了）
 最適化:
   - Optimizer: AdamW
   - Learning Rate: 1e-4
   - Scheduler: CosineAnnealingWarmRestarts
   - Gradient Clipping: 1.0
+  - Lambda BDE: 1.0（BDE損失の重み）
+```
+
+**Bond Masking（従来手法、引き続きサポート）:**
+
+```yaml
+タスク: Bond Masking（自己教師あり学習）
+期間: 50エポック（RTX 5070 Ti: ~3-5日）
 ```
 
 #### Phase 2: Teacherファインチューニング（NIST EI-MS）
@@ -428,16 +474,27 @@ dataset = NISTDataset(
 
 #### PCQM4Mv2Dataset（`src/data/pcqm4m_dataset.py`）
 
-PCQM4Mv2（3.8M分子）を用いたTeacher事前学習用データセット。
+PCQM4Mv2（3.74M分子）を用いたTeacher事前学習用データセット。
 
 **特徴**:
-- **自動ダウンロード**: OGB経由で初回実行時にダウンロード（~20GB）
-- **ボンドマスキング**: Self-supervised学習タスク（15%のボンドをマスク）
-- **PyG グラフ生成**: マスクされたボンド特徴量を含むグラフ構築
+- **自動ダウンロード**: OGB経由で初回実行時にダウンロード（~8GB）
+- **🆕 BDE Regression（推奨）**: ALFABET を使用してBDE値を生成し、GNNが各結合のBDEを予測（QC-GN2oMS2との差別化）
+- **Bond Masking（従来手法）**: Self-supervised学習タスク（15%のボンドをマスク）
+- **PyG グラフ生成**: BDE targetsまたはマスクされたボンド特徴量を含むグラフ構築
 - **Train/Val分割**: 90:10 の自動分割
 - **高速キャッシング**: 前処理済みグラフをキャッシュ
 
-**ボンドマスキング**:
+**🆕 BDE Regression（推奨）**:
+```python
+from src.data.bde_generator import BDEGenerator
+
+bde_gen = BDEGenerator(cache_dir='data/processed/bde_cache', use_cache=True)
+graph, bde_targets = mol_to_graph_with_bde(mol, bde_gen)
+# Teacherは graph からBDE値を予測（各結合に対してMSE Loss）
+# QC-GN2oMS2との差別化: BDEを学習タスクとして使用（静的特徴量ではない）
+```
+
+**Bond Masking（従来手法）**:
 ```python
 mask_ratio = 0.15  # 15%のボンドをマスク
 masked_graph, mask_targets = mol_to_graph_with_mask(mol, mask_ratio)
@@ -626,11 +683,34 @@ for batch in loader:
 
 ### Teacher Training Loss
 
+**🆕 BDE Regression Pretraining（推奨）:**
+
 ```python
-L_teacher = L_spectrum + λ_bond * L_bond_masking
+# Phase 1: 事前学習
+L_teacher_pretrain = λ_bde * L_bde_regression
+
+L_bde_regression = MSE(predicted_bde, target_bde)
+# BDE値は ALFABET で生成
+# GNNが各結合のBDEを学習（edge-level prediction）
+# QC-GN2oMS2との差別化: BDEを学習タスクとして活用
+```
+
+**Bond Masking Pretraining（従来手法）:**
+
+```python
+# Phase 1: 事前学習
+L_teacher_pretrain = λ_bond * L_bond_masking
+
+L_bond_masking = CrossEntropy(predicted_masked_bonds, true_masked_bonds)
+```
+
+**Fine-tuning Loss（Phase 2、共通）:**
+
+```python
+# Phase 2: ファインチューニング
+L_teacher_finetune = L_spectrum
 
 L_spectrum = MSE(predicted_spectrum, target_spectrum)
-L_bond_masking = CrossEntropy(predicted_masked_bonds, true_masked_bonds)
 ```
 
 ### Student Training Loss（完全版）
@@ -836,10 +916,26 @@ MIT License
 
 ## 更新履歴
 
+- **v2.0.2** (2025-11-26): 🆕 BDE Regression事前学習実装
+  - **BDE Regression Pretraining**: Bond Dissociation Energy（結合解離エネルギー）を学習タスクとして使用
+    - ALFABET統合: BDE値を自動生成（290,664 BDEsから学習）
+    - QC-GN2oMS2との差別化: BDEを学習タスクとして活用（静的特徴量ではない）
+    - 訓練時間最適化: サブセット（50万分子）で16時間、全データ（3.74M）で3.5日
+  - **新規ファイル**:
+    - `src/data/bde_generator.py`: ALFABET BDE生成器（キャッシング対応）
+    - `docs/BDE_PRETRAINING_IMPLEMENTATION_GUIDE.md`: 完全実装ガイド（765行）
+    - `docs/PCQM4Mv2_TRAINING_TIME_ESTIMATE.md`: 訓練時間詳細見積もり
+  - **更新ファイル**:
+    - `src/data/pcqm4m_dataset.py`: BDE Regression対応（Bond Masking と共存）
+    - `src/models/teacher.py`: BDE予測ヘッド追加
+    - `src/training/losses.py`: BDE回帰損失追加
+    - `src/training/teacher_trainer.py`: BDE訓練ループ実装
+  - **推奨構成**: PCQM4Mv2サブセット（50万分子）で16時間訓練、Recall@10 96.0%達成見込み
+
 - **v2.0.1** (2025-11-20): 完全データセット統合とトレーニングパイプライン実装
   - **データセットローダー完全実装**:
     - `NISTDataset`: NIST EI-MS データローダー（Teacher/Studentモード対応）
-    - `PCQM4Mv2Dataset`: PCQM4Mv2 事前学習データセット（ボンドマスキング）
+    - `PCQM4Mv2Dataset`: PCQM4Mv2 事前学習データセット（Bond Masking + 🆕 BDE Regression）
     - `preprocessing.py`: データ前処理ユーティリティ（正規化、フィルタリング、統計計算）
   - **トレーニングスクリプト統合**:
     - `train_teacher.py`: Phase 1-2完全統合（PCQM4Mv2 → NIST EI-MS）
