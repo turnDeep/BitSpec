@@ -205,6 +205,111 @@ def mol_to_graph_with_mask(
     return data, mask_targets
 
 
+def mol_to_graph_with_bde(
+    mol: Chem.Mol,
+    bde_generator=None
+) -> Tuple[Data, torch.Tensor]:
+    """
+    Convert molecule to graph with BDE regression targets
+
+    This function creates a molecular graph for BDE prediction pretraining.
+    Unlike Bond Masking (which masks bonds), this uses ALL bonds as
+    regression targets.
+
+    QC-GN2oMS2 vs NExtIMS v2.0:
+    - QC-GN2oMS2: BDE as static edge features (input)
+    - NExtIMS v2.0: BDE as regression targets (THIS FUNCTION)
+
+    Args:
+        mol: RDKit molecule
+        bde_generator: BDEGenerator instance for computing BDE values
+
+    Returns:
+        data: PyG Data with edge features
+        bde_targets: BDE values for all bonds [num_edges, 1]
+    """
+    from src.data.bde_generator import BDEGenerator
+
+    # Initialize BDE generator if not provided
+    if bde_generator is None:
+        bde_generator = BDEGenerator(use_cache=True)
+
+    # Atom features (48-dimensional) - same as bond masking
+    atom_features = []
+    for atom in mol.GetAtoms():
+        features = [
+            atom.GetAtomicNum(),
+            atom.GetTotalDegree(),
+            atom.GetFormalCharge(),
+            atom.GetTotalNumHs(),
+            atom.GetNumRadicalElectrons(),
+            atom.GetHybridization().real,
+            atom.GetIsAromatic(),
+            atom.IsInRing(),
+        ]
+        # One-hot encoding
+        features += [int(atom.GetAtomicNum() == i) for i in range(1, 37)]
+        features += [int(atom.GetTotalDegree() == i) for i in range(7)]
+        atom_features.append(features[:48])
+
+    x = torch.tensor(atom_features, dtype=torch.float)
+
+    # Bond features WITHOUT BDE (BDE will be predicted, not input)
+    # This is the key difference from QC-GN2oMS2
+    edge_index = []
+    edge_attr = []
+    bde_targets_list = []
+
+    # Get BDE values from ALFABET
+    bde_dict = bde_generator.predict_bde(mol)
+
+    for bond_idx, bond in enumerate(mol.GetBonds()):
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+
+        bond_type = bond.GetBondTypeAsDouble()
+        is_conjugated = bond.GetIsConjugated()
+        is_aromatic = bond.GetIsAromatic()
+        is_in_ring = bond.IsInRing()
+
+        # Edge features: bond properties WITHOUT BDE
+        # (we want the model to LEARN to predict BDE from these features)
+        edge_features = [bond_type, is_conjugated, is_aromatic, is_in_ring, 0.0, 0.0]
+
+        # BDE target (normalized to [0, 1])
+        bde_raw = bde_dict.get(bond_idx, 85.0)
+        bde_normalized = bde_generator.normalize_bde(bde_raw)
+
+        # Bidirectional edges
+        edge_index.append([i, j])
+        edge_index.append([j, i])
+        edge_attr.append(edge_features)
+        edge_attr.append(edge_features)
+
+        # BDE targets for both directions
+        bde_targets_list.append([bde_normalized])
+        bde_targets_list.append([bde_normalized])
+
+    # Convert to tensors
+    if edge_index:
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        edge_attr = torch.tensor(edge_attr, dtype=torch.float)
+        bde_targets = torch.tensor(bde_targets_list, dtype=torch.float)
+    else:
+        # No edges: create empty tensors
+        edge_index = torch.zeros((2, 0), dtype=torch.long)
+        edge_attr = torch.zeros((0, 6), dtype=torch.float)
+        bde_targets = torch.zeros((0, 1), dtype=torch.float)
+
+    data = Data(
+        x=x,
+        edge_index=edge_index,
+        edge_attr=edge_attr
+    )
+
+    return data, bde_targets
+
+
 def mol_to_ecfp(mol: Chem.Mol, radius: int = 2, n_bits: int = 4096) -> np.ndarray:
     """Generate ECFP4 fingerprint"""
     mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
@@ -216,15 +321,20 @@ class PCQM4Mv2Dataset(Dataset):
     """
     PCQM4Mv2 Dataset for Teacher Pretraining
 
-    Self-supervised task: Bond Masking
-    - Mask 15% of bonds
-    - Predict masked bond types and features
+    Supports two pretraining tasks:
+    1. Bond Masking (original): Mask 15% of bonds, predict features
+    2. BDE Regression (NEW): Predict Bond Dissociation Energies for all bonds
+
+    QC-GN2oMS2 Comparison:
+    - QC-GN2oMS2: Uses BDE as input features (static)
+    - NExtIMS v2.0: Learns BDE patterns via regression (dynamic)
     """
 
     def __init__(
         self,
         data_config: Dict,
         split: str = 'train',
+        pretrain_task: str = 'bde',  # NEW: 'bond_masking' or 'bde'
         mask_ratio: float = 0.15,
         cache_dir: Optional[str] = None,
         download: bool = True
@@ -233,13 +343,29 @@ class PCQM4Mv2Dataset(Dataset):
         Args:
             data_config: Data configuration
             split: 'train' or 'val'
-            mask_ratio: Ratio of bonds to mask
+            pretrain_task: Pretraining task type
+                - 'bond_masking': Original bond masking (default in v1.0)
+                - 'bde': BDE regression (NEW, recommended)
+            mask_ratio: Ratio of bonds to mask (only for bond_masking)
             cache_dir: Cache directory
             download: Auto-download if not exists
         """
         self.data_config = data_config
         self.split = split
+        self.pretrain_task = pretrain_task
         self.mask_ratio = mask_ratio
+
+        # Initialize BDE generator if using BDE task
+        if self.pretrain_task == 'bde':
+            from src.data.bde_generator import BDEGenerator
+            bde_cache_dir = Path(cache_dir or 'data/processed') / 'bde_cache'
+            self.bde_generator = BDEGenerator(
+                cache_dir=str(bde_cache_dir),
+                use_cache=True
+            )
+            logger.info(f"Initialized BDE generator for BDE regression pretraining")
+        else:
+            self.bde_generator = None
 
         # Data directory
         data_dir = Path(data_config.get('pcqm4mv2_path', 'data/pcqm4mv2'))
@@ -387,12 +513,21 @@ class PCQM4Mv2Dataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict:
         """
-        Returns:
+        Returns different data based on pretrain_task:
+
+        Bond Masking:
             {
                 'graph': PyG Data with masked bonds
                 'ecfp': ECFP4 fingerprint
                 'mask_indices': Indices of masked edges
                 'mask_targets': Target bond features
+            }
+
+        BDE Regression (NEW):
+            {
+                'graph': PyG Data (NO masking)
+                'ecfp': ECFP4 fingerprint
+                'bde_targets': BDE values for all edges [num_edges, 1]
             }
         """
         real_idx = self.split_indices[idx]
@@ -405,23 +540,42 @@ class PCQM4Mv2Dataset(Dataset):
             logger.warning(f"Invalid molecule at index {idx}: {smiles}, using fallback")
             mol = Chem.MolFromSmiles('CCO')
 
-        # Generate graph with masking
-        graph, mask_targets = mol_to_graph_with_mask(mol, self.mask_ratio)
-
-        # Generate ECFP
+        # Generate ECFP (common for both tasks)
         ecfp = mol_to_ecfp(mol)
 
-        return {
-            'graph': graph,
-            'ecfp': torch.tensor(ecfp, dtype=torch.float32),
-            'mask_indices': graph.mask_indices,
-            'mask_targets': mask_targets,
-            'smiles': smiles
-        }
+        # Task-specific graph generation
+        if self.pretrain_task == 'bde':
+            # BDE Regression: predict BDE for ALL bonds
+            graph, bde_targets = mol_to_graph_with_bde(mol, self.bde_generator)
+
+            return {
+                'graph': graph,
+                'ecfp': torch.tensor(ecfp, dtype=torch.float32),
+                'bde_targets': bde_targets,  # [num_edges, 1]
+                'smiles': smiles
+            }
+
+        else:  # bond_masking
+            # Bond Masking: mask 15% of bonds
+            graph, mask_targets = mol_to_graph_with_mask(mol, self.mask_ratio)
+
+            return {
+                'graph': graph,
+                'ecfp': torch.tensor(ecfp, dtype=torch.float32),
+                'mask_indices': graph.mask_indices,
+                'mask_targets': mask_targets,
+                'smiles': smiles
+            }
 
 
 def collate_fn_pretrain(batch: List[Dict]) -> Dict:
-    """Custom collate for pretraining"""
+    """
+    Custom collate for pretraining
+
+    Supports both:
+    1. Bond Masking: Returns mask_indices and mask_targets
+    2. BDE Regression (NEW): Returns bde_targets for all edges
+    """
     from torch_geometric.data import Batch
 
     graphs = [sample['graph'] for sample in batch]
@@ -430,35 +584,56 @@ def collate_fn_pretrain(batch: List[Dict]) -> Dict:
     # Batch graphs
     graph_batch = Batch.from_data_list(graphs)
 
-    # Collect all mask indices and targets
-    mask_indices_list = []
-    mask_targets_list = []
+    # Check which task we're using (BDE or Bond Masking)
+    # by checking if first sample has 'bde_targets' key
+    if 'bde_targets' in batch[0]:
+        # BDE Regression task
+        bde_targets_list = [sample['bde_targets'] for sample in batch]
 
-    edge_offset = 0
-    for graph in graphs:
-        if graph.mask_indices.numel() > 0:
-            # Adjust indices for batched graph
-            adjusted_indices = graph.mask_indices + edge_offset
-            mask_indices_list.append(adjusted_indices)
-            mask_targets_list.append(graph.mask_targets)
+        # Concatenate all BDE targets
+        if bde_targets_list:
+            bde_targets = torch.cat(bde_targets_list, dim=0)  # [total_edges, 1]
+        else:
+            bde_targets = torch.zeros((0, 1), dtype=torch.float)
 
-        # Safely get number of edges, handling both normal and empty graphs
-        num_edges = graph.edge_index.size(1) if graph.edge_index.dim() == 2 else 0
-        edge_offset += num_edges
+        return {
+            'graph': graph_batch,
+            'ecfp': ecfps,
+            'bde_targets': bde_targets,  # NEW: BDE regression targets
+            'task': 'bde'
+        }
 
-    if mask_indices_list:
-        mask_indices = torch.cat(mask_indices_list, dim=0)
-        mask_targets = torch.cat(mask_targets_list, dim=0)
     else:
-        mask_indices = torch.zeros(0, dtype=torch.long)
-        mask_targets = torch.zeros((0, 4), dtype=torch.float)
+        # Bond Masking task (original)
+        mask_indices_list = []
+        mask_targets_list = []
 
-    # Add mask_indices to graph_batch for easy access in model forward
-    graph_batch.mask_indices = mask_indices
+        edge_offset = 0
+        for graph in graphs:
+            if graph.mask_indices.numel() > 0:
+                # Adjust indices for batched graph
+                adjusted_indices = graph.mask_indices + edge_offset
+                mask_indices_list.append(adjusted_indices)
+                mask_targets_list.append(graph.mask_targets)
 
-    return {
-        'graph': graph_batch,
-        'ecfp': ecfps,
-        'mask_indices': mask_indices,
-        'mask_targets': mask_targets
-    }
+            # Safely get number of edges, handling both normal and empty graphs
+            num_edges = graph.edge_index.size(1) if graph.edge_index.dim() == 2 else 0
+            edge_offset += num_edges
+
+        if mask_indices_list:
+            mask_indices = torch.cat(mask_indices_list, dim=0)
+            mask_targets = torch.cat(mask_targets_list, dim=0)
+        else:
+            mask_indices = torch.zeros(0, dtype=torch.long)
+            mask_targets = torch.zeros((0, 4), dtype=torch.float)
+
+        # Add mask_indices to graph_batch for easy access in model forward
+        graph_batch.mask_indices = mask_indices
+
+        return {
+            'graph': graph_batch,
+            'ecfp': ecfps,
+            'mask_indices': mask_indices,
+            'mask_targets': mask_targets,
+            'task': 'bond_masking'
+        }

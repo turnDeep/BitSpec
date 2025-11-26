@@ -16,11 +16,18 @@ from src.models.moe import load_balancing_loss, entropy_regularization
 
 class TeacherLoss(nn.Module):
     """
-    Teacher Training Loss: L_teacher = L_spectrum + λ_bond * L_bond_masking
+    Teacher Training Loss:
+    - Bond Masking: L_teacher = L_spectrum + λ_bond * L_bond_masking
+    - BDE Regression (NEW): L_teacher = λ_bde * L_bde_regression
+
+    QC-GN2oMS2 vs NExtIMS v2.0:
+    - QC-GN2oMS2: No pretraining loss (BDE as input only)
+    - NExtIMS v2.0: BDE regression pretraining loss (THIS CLASS)
     """
-    def __init__(self, lambda_bond: float = 0.1):
+    def __init__(self, lambda_bond: float = 0.1, lambda_bde: float = 1.0):
         super().__init__()
-        self.lambda_bond = lambda_bond
+        self.lambda_bond = lambda_bond  # Bond Masking weight
+        self.lambda_bde = lambda_bde    # BDE Regression weight (NEW)
         self.spectrum_loss = nn.MSELoss()
 
     def forward(
@@ -28,14 +35,18 @@ class TeacherLoss(nn.Module):
         predicted_spectrum,
         target_spectrum,
         bond_predictions=None,
-        bond_targets=None
+        bond_targets=None,
+        bde_predictions=None,
+        bde_targets=None
     ):
         """
         Args:
             predicted_spectrum: [batch_size, 501]
             target_spectrum: [batch_size, 501]
-            bond_predictions: [num_masked_bonds, 4] (optional, for pretraining)
-            bond_targets: [num_masked_bonds, 4] (optional, for pretraining)
+            bond_predictions: [num_masked_bonds, 4] (optional, Bond Masking pretraining)
+            bond_targets: [num_masked_bonds, 4] (optional, Bond Masking pretraining)
+            bde_predictions: [num_edges, 1] (optional, BDE Regression pretraining, NEW)
+            bde_targets: [num_edges, 1] (optional, BDE Regression pretraining, NEW)
 
         Returns:
             loss: Total loss
@@ -46,8 +57,26 @@ class TeacherLoss(nn.Module):
 
         loss_dict = {'spectrum_loss': loss_spectrum.item()}
 
-        # Bond masking loss (pretraining only)
-        if bond_predictions is not None and bond_targets is not None:
+        # BDE regression loss (NEW: for BDE pretraining)
+        if bde_predictions is not None and bde_targets is not None:
+            if bde_predictions.numel() > 0 and bde_targets.numel() > 0:
+                # MSE loss for BDE regression
+                loss_bde = F.mse_loss(bde_predictions, bde_targets)
+                loss = self.lambda_bde * loss_bde
+
+                loss_dict['bde_loss'] = loss_bde.item()
+
+                # Additional MAE metric for monitoring
+                mae_bde = F.l1_loss(bde_predictions, bde_targets)
+                loss_dict['bde_mae'] = mae_bde.item()
+            else:
+                # No edges in this batch
+                loss = torch.tensor(0.0, device=predicted_spectrum.device)
+                loss_dict['bde_loss'] = 0.0
+                loss_dict['bde_mae'] = 0.0
+
+        # Bond masking loss (original pretraining)
+        elif bond_predictions is not None and bond_targets is not None:
             # MSE loss for bond feature prediction (bond_type, conjugated, aromatic, in_ring)
             if bond_predictions.numel() > 0 and bond_targets.numel() > 0:
                 loss_bond = F.mse_loss(bond_predictions, bond_targets)
@@ -57,6 +86,8 @@ class TeacherLoss(nn.Module):
                 # No masked bonds in this batch
                 loss = loss_spectrum
                 loss_dict['bond_loss'] = 0.0
+
+        # Spectrum-only loss (finetuning)
         else:
             loss = loss_spectrum
 
