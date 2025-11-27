@@ -280,6 +280,12 @@ python scripts/benchmark_memory.py --mode compare --max_samples 300000
 # TensorFlow依存関係のインストール（Phase 0のみ必要）
 pip install -r requirements-phase0.txt
 
+# Install ALFABET with --no-deps
+pip install --no-deps alfabet>=0.4.1
+
+# Run the patch script
+python scripts/patch_alfabet_keras3.py
+
 # サブセット（50万分子、20-30分 on CPU）- 推奨
 python scripts/precompute_bde.py --max-samples 500000
 
