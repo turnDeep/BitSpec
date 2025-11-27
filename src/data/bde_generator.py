@@ -57,9 +57,18 @@ class BDEGenerator:
     - Falls back to direct ALFABET prediction if cache miss
     - Most efficient: Run Phase 0 once, then use HDF5 cache for all training
 
+    Cyclic Bond Handling (ALFABET Limitation):
+    - ALFABET only predicts acyclic (non-ring) bonds
+    - Aromatic ring bonds: 120 kcal/mol (benzene ~124, maximum stability)
+    - Aliphatic ring bonds: 85 kcal/mol (cyclohexane ~83, similar to acyclic)
+    - This distinction is critical for EI-MS: aromatic rings rarely fragment at 70eV
+
     QC-GN2oMS2 Comparison:
-    - QC-GN2oMS2: Uses BDE as static edge features
-    - NExtIMS v2.0: Uses BDE as pretraining task target (this class)
+    - QC-GN2oMS2 (MS/MS): Uses BDE as static edge features, cyclic bonds = 0
+    - NExtIMS v2.0 (EI-MS): Uses BDE as pretraining task target (this class)
+      * Learns to predict BDE from molecular structure
+      * Cyclic bonds properly handled (aromatic=120, aliphatic=85)
+      * Inference does not require ALFABET (knowledge embedded in GNN)
     """
 
     def __init__(
@@ -69,7 +78,7 @@ class BDEGenerator:
         use_hdf5: bool = True,  # NEW: Use HDF5 cache from Phase 0
         bde_min: float = 50.0,   # Typical minimum BDE (kcal/mol)
         bde_max: float = 120.0,  # Typical maximum BDE (kcal/mol)
-        fallback_bde: float = 85.0  # Default BDE if ALFABET fails
+        fallback_bde: float = 85.0  # Default BDE for acyclic C-C & aliphatic rings
     ):
         """
         Args:
@@ -78,7 +87,10 @@ class BDEGenerator:
             use_hdf5: Whether to use HDF5 cache from Phase 0 (recommended)
             bde_min: Minimum BDE for normalization (kcal/mol)
             bde_max: Maximum BDE for normalization (kcal/mol)
-            fallback_bde: Fallback BDE value if prediction fails
+            fallback_bde: Fallback BDE value if ALFABET prediction fails
+                - Used for acyclic C-C bonds: ~85 kcal/mol (typical)
+                - Used for aliphatic rings: ~83-85 kcal/mol (cyclohexane)
+                - Aromatic rings use 120 kcal/mol (see predict_bde method)
         """
         self.use_cache = use_cache
         self.use_hdf5 = use_hdf5
@@ -156,8 +168,13 @@ class BDEGenerator:
         Priority:
         1. HDF5 cache (from Phase 0) - fastest
         2. Pickle cache (legacy) - fast
-        3. ALFABET direct prediction - slow
-        4. Rule-based estimation - fallback
+        3. ALFABET direct prediction - slow (acyclic bonds only)
+        4. Rule-based supplementation for cyclic bonds (ALFABET limitation)
+        5. Full rule-based estimation - fallback
+
+        BDE values for cyclic bonds (ALFABET does not predict):
+        - Aromatic rings: 120 kcal/mol (benzene ~124, max stability for GNN)
+        - Aliphatic rings: 85 kcal/mol (cyclohexane ~83, similar to acyclic)
 
         Args:
             mol: RDKit molecule
@@ -188,22 +205,42 @@ class BDEGenerator:
             return self.cache[smiles]
 
         # Priority 3: ALFABET direct prediction
+        bde_dict = {}
         if self.predictor is not None:
             try:
                 # ALFABET expects a list of SMILES
                 predictions = self.predictor.predict([smiles])
                 if predictions and len(predictions) > 0:
-                    bde_dict = predictions[0]
-                    if bde_dict:
-                        # Cache result in pickle
-                        if self.use_cache:
-                            self.cache[smiles] = bde_dict
-                        return bde_dict
+                    alfabet_predictions = predictions[0]
+                    if alfabet_predictions:
+                        bde_dict = alfabet_predictions
             except Exception as e:
                 logger.debug(f"ALFABET prediction failed: {e}, using rule-based estimation")
 
-        # Priority 4: Rule-based estimation (fallback)
-        bde_dict = self._rule_based_bde(mol)
+        # Priority 4: Supplement missing bonds (typically cyclic bonds)
+        # ALFABET only predicts acyclic bonds, so we need to fill in cyclic bonds
+        num_bonds = mol.GetNumBonds()
+        if len(bde_dict) < num_bonds:
+            for bond_idx, bond in enumerate(mol.GetBonds()):
+                if bond_idx not in bde_dict:
+                    # Bond not predicted by ALFABET (likely cyclic)
+                    if bond.IsInRing():
+                        if bond.GetIsAromatic():
+                            # Aromatic ring: highly stable in EI-MS
+                            # Benzene C-C: ~124 kcal/mol (experimental)
+                            # Use 120 to signal maximum stability to GNN
+                            bde_dict[bond_idx] = 120.0
+                        else:
+                            # Aliphatic ring: similar to acyclic
+                            # Cyclohexane C-C: ~83 kcal/mol
+                            bde_dict[bond_idx] = 85.0
+                    else:
+                        # Acyclic but ALFABET failed: use fallback
+                        bde_dict[bond_idx] = self.fallback_bde
+
+        # Priority 5: If still no predictions, use full rule-based estimation
+        if not bde_dict:
+            bde_dict = self._rule_based_bde(mol)
 
         # Cache result
         if self.use_cache:
@@ -215,12 +252,17 @@ class BDEGenerator:
         """
         Rule-based BDE estimation (fallback when ALFABET unavailable)
 
-        Based on bond type and chemical environment:
-        - Single bonds: 80-90 kcal/mol
+        Based on bond type and chemical environment for EI-MS (70eV):
+        - Single bonds: 80-90 kcal/mol (acyclic C-C: ~85)
         - Double bonds: 100-110 kcal/mol
         - Triple bonds: 110-120 kcal/mol
-        - Aromatic bonds: 90-100 kcal/mol
+        - Aromatic bonds: 120 kcal/mol (benzene C-C: ~124, rarely breaks in EI-MS)
+        - Aliphatic rings: 83-85 kcal/mol (cyclohexane: ~83)
         - Weak bonds (next to heteroatoms): -10 kcal/mol
+
+        References:
+        - Blanksby & Ellison, Acc. Chem. Res. 2003, 36, 255-263
+        - Aromatic ring stability in EI-MS: fragmentation occurs at β-bond to ring
         """
         bde_dict = {}
 
@@ -235,7 +277,10 @@ class BDEGenerator:
             elif bond_type == 3.0:  # Triple bond
                 base_bde = 115.0
             elif bond.GetIsAromatic():  # Aromatic
-                base_bde = 95.0
+                # Aromatic C-C bonds: ~124-147 kcal/mol (experimental)
+                # Use 120 (bde_max) to signal maximum stability to GNN
+                # EI-MS (70eV): aromatic rings rarely break, produce prominent M+
+                base_bde = 120.0
             else:
                 base_bde = self.fallback_bde
 
@@ -276,6 +321,7 @@ class BDEGenerator:
         # Create bidirectional edge features
         bde_features = []
         for bond_idx in range(num_bonds):
+            # Failsafe: predict_bde should cover all bonds, but use fallback just in case
             bde = bde_dict.get(bond_idx, self.fallback_bde)
 
             if normalize:
