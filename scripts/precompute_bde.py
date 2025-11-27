@@ -137,14 +137,39 @@ def load_pcqm4mv2_dataset(data_dir: str, max_samples: int = 0):
         # PCQM4Mv2Dataset with only_smiles=True returns data in various formats
         data = dataset[idx]
 
+        # Debug: Print first item structure
+        if idx == 0:
+            logger.info(f"First data item type: {type(data)}")
+            logger.info(f"First data item content: {data}")
+            if isinstance(data, tuple) and len(data) > 0:
+                logger.info(f"First element type: {type(data[0])}")
+                logger.info(f"First element content: {data[0]}")
+
         # Extract SMILES string from different data formats
+        smiles = None
         if isinstance(data, dict):
             # Dictionary format: {'smiles': 'CC...'}
             smiles = data.get('smiles', data.get('SMILES', ''))
         elif isinstance(data, tuple):
-            # Tuple format: (smiles,) or (graph, smiles)
-            # PCQM4Mv2 with only_smiles=True typically returns (smiles,)
-            smiles = data[0] if len(data) > 0 else ''
+            # Tuple format: could be nested
+            # Try to extract string from tuple
+            for item in data:
+                if isinstance(item, str):
+                    smiles = item
+                    break
+                elif isinstance(item, dict):
+                    smiles = item.get('smiles', item.get('SMILES', ''))
+                    if smiles:
+                        break
+
+            # If still no SMILES found, try first element
+            if not smiles and len(data) > 0:
+                first_elem = data[0]
+                if isinstance(first_elem, str):
+                    smiles = first_elem
+                else:
+                    logger.warning(f"Index {idx}: Tuple first element is {type(first_elem)}, not string")
+                    smiles = str(first_elem) if first_elem else ''
         elif isinstance(data, str):
             # Direct string format
             smiles = data
@@ -154,6 +179,8 @@ def load_pcqm4mv2_dataset(data_dir: str, max_samples: int = 0):
             smiles = str(data) if data else ''
 
         if not smiles or not isinstance(smiles, str):
+            if idx < 5:  # Log first few failures
+                logger.warning(f"Index {idx}: Failed to extract valid SMILES. Type: {type(smiles)}, Value: {smiles}")
             invalid_count += 1
             continue
 
