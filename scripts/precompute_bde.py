@@ -134,7 +134,18 @@ def load_pcqm4mv2_dataset(data_dir: str, max_samples: int = 0):
     invalid_count = 0
 
     for idx in tqdm(range(num_samples), desc="Loading molecules"):
-        smiles = dataset.smiles[idx]
+        # PCQM4Mv2Dataset with only_smiles=True returns SMILES string directly
+        data = dataset[idx]
+        # Handle both string and dict returns
+        if isinstance(data, dict):
+            smiles = data.get('smiles', data.get('SMILES', ''))
+        else:
+            smiles = data
+
+        if not smiles:
+            invalid_count += 1
+            continue
+
         mol = Chem.MolFromSmiles(smiles)
 
         if mol is not None:
