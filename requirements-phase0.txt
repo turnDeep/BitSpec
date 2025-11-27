@@ -16,6 +16,9 @@ tensorflow>=2.15.0,<2.20.0
 # ALFABET - BDE prediction tool
 # Paper: https://www.nature.com/articles/s41467-020-16201-z
 # MAE: 0.58 kcal/mol on 290,664 BDEs from 42,577 molecules
+# Note: ALFABET requires scikit-learn==0.24.2, but we override with a newer version
+#       for Python 3.11 compatibility. The API is stable enough that this should work.
+scikit-learn>=1.3.0,<1.6.0
 alfabet>=0.4.1
 
 # OGB - For PCQM4Mv2 dataset loading
