@@ -134,15 +134,26 @@ def load_pcqm4mv2_dataset(data_dir: str, max_samples: int = 0):
     invalid_count = 0
 
     for idx in tqdm(range(num_samples), desc="Loading molecules"):
-        # PCQM4Mv2Dataset with only_smiles=True returns SMILES string directly
+        # PCQM4Mv2Dataset with only_smiles=True returns data in various formats
         data = dataset[idx]
-        # Handle both string and dict returns
-        if isinstance(data, dict):
-            smiles = data.get('smiles', data.get('SMILES', ''))
-        else:
-            smiles = data
 
-        if not smiles:
+        # Extract SMILES string from different data formats
+        if isinstance(data, dict):
+            # Dictionary format: {'smiles': 'CC...'}
+            smiles = data.get('smiles', data.get('SMILES', ''))
+        elif isinstance(data, tuple):
+            # Tuple format: (smiles,) or (graph, smiles)
+            # PCQM4Mv2 with only_smiles=True typically returns (smiles,)
+            smiles = data[0] if len(data) > 0 else ''
+        elif isinstance(data, str):
+            # Direct string format
+            smiles = data
+        else:
+            # Unknown format
+            logger.warning(f"Unexpected data type at index {idx}: {type(data)}")
+            smiles = str(data) if data else ''
+
+        if not smiles or not isinstance(smiles, str):
             invalid_count += 1
             continue
 
