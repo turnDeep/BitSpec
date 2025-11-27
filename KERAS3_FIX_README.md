@@ -46,12 +46,18 @@ The script will:
 ### 3. Run BDE Pre-computation
 
 ```bash
-# Test with a small subset (faster)
+# Test with a small subset (faster, recommended for testing)
 python scripts/precompute_bde.py --max-samples 1000
 
-# Full dataset
+# Medium subset (500K molecules, ~20-30 min on CPU)
+python scripts/precompute_bde.py --max-samples 500000
+
+# Full dataset (3.74M molecules, ~2-3 hours on CPU)
+# Note: Uses streaming processing to minimize memory usage
 python scripts/precompute_bde.py --max-samples 0
 ```
+
+**Memory Optimization**: The script now uses streaming processing, writing BDE data directly to HDF5 instead of keeping everything in memory. This prevents OOM errors even with the full 3.74M molecule dataset.
 
 ## Technical Details
 
