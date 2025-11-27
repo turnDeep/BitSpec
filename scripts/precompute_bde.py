@@ -96,6 +96,54 @@ def check_dependencies():
     try:
         from alfabet import model as alfabet_model
         logger.info("ALFABET loaded successfully")
+
+        # Apply patch to fix verbose parameter issue with TensorFlow 2.19+
+        try:
+            # Try to import all alfabet submodules to ensure classes are loaded
+            try:
+                import alfabet.predictor
+            except ImportError:
+                pass
+
+            # Scan all loaded modules for AlfabetModelWrapper or similar wrapper classes
+            patched = False
+            for module_name, module in list(sys.modules.items()):
+                if 'alfabet' in module_name.lower() and module is not None:
+                    # Look for wrapper classes
+                    for attr_name in dir(module):
+                        try:
+                            attr = getattr(module, attr_name)
+                            # Check if this is a class with a predict method
+                            if (isinstance(attr, type) and
+                                ('wrapper' in attr_name.lower() or 'model' in attr_name.lower()) and
+                                hasattr(attr, 'predict') and
+                                attr_name != 'Model'):  # Exclude Keras Model class
+
+                                # Get the original predict method
+                                original_predict = attr.predict
+
+                                # Create a wrapper that removes the verbose parameter
+                                def make_patched_predict(orig_method):
+                                    def patched_predict(self, *args, **kwargs):
+                                        # Remove verbose parameter to avoid errors
+                                        kwargs.pop('verbose', None)
+                                        return orig_method(self, *args, **kwargs)
+                                    return patched_predict
+
+                                # Apply the patch
+                                attr.predict = make_patched_predict(original_predict)
+                                logger.info(f"Applied verbose parameter fix to {module_name}.{attr_name}.predict()")
+                                patched = True
+                        except Exception:
+                            continue
+
+            if not patched:
+                logger.info("No wrapper class found to patch (this is OK if not needed)")
+
+        except Exception as e:
+            logger.warning(f"Could not apply ALFABET compatibility patch: {e}")
+            logger.warning("Will attempt to continue anyway...")
+
         return alfabet_model
     except ImportError:
         logger.error("ALFABET is not installed. Please run: pip install alfabet>=0.4.1")
@@ -334,8 +382,12 @@ def main():
     success_count = 0
     failed_count = 0
     invalid_smiles_count = 0
+    verbose_error_count = 0
     total_bde_values = 0
     bde_values_for_stats = []  # Sample for statistics
+
+    # Track if we need to apply additional patches after first prediction
+    first_prediction_done = False
 
     with h5py.File(args.output, 'w') as h5_file:
         # Store initial metadata
@@ -358,6 +410,36 @@ def main():
                     # Predict BDE for this molecule
                     predictions = alfabet_model.predict([smiles])
 
+                    # After first successful prediction, apply patches again
+                    # (in case lazy-loaded classes weren't available before)
+                    if not first_prediction_done and predictions:
+                        first_prediction_done = True
+                        try:
+                            # Re-scan for wrapper classes that may have been lazy-loaded
+                            for module_name, module in list(sys.modules.items()):
+                                if 'alfabet' in module_name.lower() and module is not None:
+                                    for attr_name in dir(module):
+                                        try:
+                                            attr = getattr(module, attr_name)
+                                            if (isinstance(attr, type) and
+                                                'wrapper' in attr_name.lower() and
+                                                hasattr(attr, 'predict')):
+
+                                                # Apply patch if not already patched
+                                                original_predict = attr.predict
+                                                def make_patched_predict(orig_method):
+                                                    def patched_predict(self, *args, **kwargs):
+                                                        kwargs.pop('verbose', None)
+                                                        return orig_method(self, *args, **kwargs)
+                                                    return patched_predict
+
+                                                attr.predict = make_patched_predict(original_predict)
+                                                logger.info(f"Applied late patch to {module_name}.{attr_name}.predict()")
+                                        except Exception:
+                                            continue
+                        except Exception as e:
+                            logger.debug(f"Late patching attempt: {e}")
+
                     if predictions and len(predictions) > 0:
                         bde_dict = predictions[0]
                         if bde_dict:
@@ -375,8 +457,21 @@ def main():
                         failed_count += 1
 
                 except Exception as e:
-                    if failed_count < 10:  # Log first 10 errors
-                        logger.warning(f"Failed to predict BDE for {smiles}: {e}")
+                    error_msg = str(e)
+
+                    # Check if this is the verbose parameter error
+                    if 'verbose' in error_msg.lower() and 'unexpected keyword argument' in error_msg.lower():
+                        verbose_error_count += 1
+                        # Only log the first few verbose errors
+                        if verbose_error_count <= 3:
+                            logger.warning(f"Verbose parameter error for {smiles}: {e}")
+                            if verbose_error_count == 3:
+                                logger.warning(f"Suppressing further verbose parameter error messages...")
+                    else:
+                        # Log other types of errors (first 10)
+                        if failed_count < 10:
+                            logger.warning(f"Failed to predict BDE for {smiles}: {e}")
+
                     failed_count += 1
 
             # Periodic progress update every 10k molecules
@@ -396,6 +491,8 @@ def main():
     logger.info(f"BDE computation completed in {elapsed_time/60:.1f} minutes ({elapsed_time/3600:.2f} hours)")
     logger.info(f"Success: {success_count:,} / {len(smiles_list):,} molecules "
                f"({failed_count} failed, {invalid_smiles_count} invalid SMILES)")
+    if verbose_error_count > 0:
+        logger.info(f"Note: {verbose_error_count} molecules failed due to verbose parameter errors (ALFABET/TensorFlow compatibility issue)")
 
     # Compute statistics from sample
     if bde_values_for_stats:
