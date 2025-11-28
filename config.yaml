@@ -14,8 +14,9 @@ data:
   nist_msp_path: "data/NIST17.MSP"
   mol_files_dir: "data/mol_files"
 
-  # PCQM4Mv2 事前学習データ（自動ダウンロード）
-  pcqm4mv2_path: "data/pcqm4mv2"
+  # BDE-db2データ（BonDNet再学習用）
+  bde_db2_path: "data/external/bde-db2"
+  bondnet_training_data: "data/processed/bondnet_training"
 
   # 補助データ（オプション）
   massbank_path: "data/massbank"  # Optional
@@ -137,27 +138,9 @@ model:
     
 # 訓練設定
 training:
-  # Phase 1: Teacher事前学習（PCQM4Mv2）
-  teacher_pretrain:
-    dataset: "PCQM4Mv2"
-    task: "bond_masking"         # Self-supervised task
-    batch_size: 128              # RTX 5070 Ti: 16GB対応
-    num_epochs: 50
-    num_workers: 8               # Ryzen 7700: 8コア
-    prefetch_factor: 4
-    learning_rate: 1.0e-4
-    weight_decay: 1.0e-5
-    optimizer: "AdamW"
-    scheduler: "CosineAnnealingWarmRestarts"
-    scheduler_t0: 10
-    scheduler_tmult: 2
-    gradient_clip: 1.0
-    use_amp: true                # Mixed Precision
-    checkpoint_dir: "checkpoints/teacher"
-    save_interval: 10
-
-  # Phase 2: Teacherファインチューニング（NIST EI-MS）
-  teacher_finetune:
+  # Phase 1: Teacherマルチタスク学習（NIST17のみ - 直接学習）
+  # PCQM4Mv2事前学習を削除し、NIST17で直接学習（アプローチB）
+  teacher_multitask:
     dataset: "NIST_EIMS"
     batch_size: 32               # MC Dropout用に小さめ
     num_epochs: 100
@@ -174,9 +157,17 @@ training:
     mc_dropout_samples: 30       # Uncertainty estimation
     checkpoint_dir: "checkpoints/teacher"
     save_interval: 5
-    pretrained_checkpoint: "checkpoints/teacher/pretrained_teacher.pt"
 
-  # Phase 3: Student知識蒸留
+    # Multitask Learning Configuration
+    multitask:
+      use_bde_auxiliary: true    # BDE補助タスクを有効化
+      bde_cache_path: "data/processed/bde_cache/nist17_bde_cache.h5"
+      lambda_spectrum: 1.0       # スペクトル予測損失の重み（主タスク）
+      lambda_bde: 0.1            # BDE回帰損失の重み（補助タスク）
+      use_peak_loss: false       # Peak-focused loss（オプション）
+      peak_threshold: 0.05       # Peak detection threshold
+
+  # Phase 2: Student知識蒸留
   student_distill:
     dataset: "NIST_EIMS"
     batch_size: 32
