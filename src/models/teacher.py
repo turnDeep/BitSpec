@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GINEConv, global_add_pool, global_mean_pool, global_max_pool
 from torch_geometric.nn import PairNorm
+from torch_geometric.utils import scatter
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdFingerprintGenerator
 import numpy as np
@@ -66,9 +67,93 @@ class BondBreakingAttention(nn.Module):
         return bond_probs
 
 
+class BondAwarePooling(nn.Module):
+    """
+    Bond-Aware Pooling Module
+
+    Uses bond-breaking probabilities to create fragmentation-aware graph embeddings.
+    This helps the model understand which bonds are likely to break during ionization,
+    improving spectrum prediction accuracy.
+    """
+    def __init__(self, hidden_dim: int = 256):
+        super().__init__()
+        self.attention_transform = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        self.gate = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Sigmoid()
+        )
+
+    def forward(
+        self,
+        node_features: torch.Tensor,
+        edge_index: torch.Tensor,
+        bond_probs: torch.Tensor,
+        batch: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Create fragmentation-aware graph embeddings.
+
+        Args:
+            node_features: [N, hidden_dim] - Node representations from GNN
+            edge_index: [2, E] - Edge connectivity
+            bond_probs: [E, 1] - Bond breaking probabilities (0=stable, 1=breaks easily)
+            batch: [N] - Batch assignment for each node
+
+        Returns:
+            fragmentation_aware_emb: [batch_size, hidden_dim] - Graph embeddings
+        """
+        # Aggregate bond breaking probabilities for each node
+        # Higher values indicate nodes connected to breakable bonds
+        row, col = edge_index
+
+        # Sum of bond breaking probabilities for edges connected to each node
+        node_bond_importance = scatter(
+            bond_probs.squeeze(-1),  # [E]
+            row,
+            dim=0,
+            dim_size=node_features.size(0),
+            reduce='sum'
+        )  # [N]
+
+        # Normalize by node degree to get average bond breakability
+        node_degree = scatter(
+            torch.ones_like(bond_probs.squeeze(-1)),
+            row,
+            dim=0,
+            dim_size=node_features.size(0),
+            reduce='sum'
+        )  # [N]
+        node_bond_importance = node_bond_importance / (node_degree + 1e-8)  # [N]
+
+        # Apply attention: nodes with higher bond breaking probability get more weight
+        # This emphasizes fragments that are likely to appear in the spectrum
+        attention_weights = torch.sigmoid(node_bond_importance).unsqueeze(-1)  # [N, 1]
+
+        # Transform node features
+        transformed_features = self.attention_transform(node_features)  # [N, hidden_dim]
+
+        # Gate mechanism: blend original and transformed features based on bond breakability
+        gate_values = self.gate(node_features)  # [N, hidden_dim]
+        gated_features = gate_values * transformed_features + (1 - gate_values) * node_features
+
+        # Weight by bond breaking importance
+        weighted_features = gated_features * attention_weights  # [N, hidden_dim]
+
+        # Global pooling to get graph-level embedding
+        graph_emb = global_add_pool(weighted_features, batch)  # [batch_size, hidden_dim]
+
+        return graph_emb
+
+
 class GNNBranch(nn.Module):
     """
     GNN Branch: GINEConv with DropEdge and PairNorm
+
+    Supports variable edge feature dimensions to accommodate BDE predictions.
     """
     def __init__(
         self,
@@ -86,9 +171,12 @@ class GNNBranch(nn.Module):
         self.dropout = dropout
         self.drop_edge = drop_edge
         self.use_pair_norm = use_pair_norm
+        self.base_edge_features = edge_features  # Store base edge feature dimension
 
         # Input embedding
         self.node_embedding = nn.Linear(node_features, hidden_dim)
+        # Edge embedding can now handle variable input dimensions
+        # Will be set dynamically in forward pass if edge features include BDE
         self.edge_embedding = nn.Linear(edge_features, edge_dim)
 
         # GINEConv layers
@@ -236,6 +324,11 @@ class TeacherModel(nn.Module):
 
         # Bond-Breaking Attention (optional)
         self.use_bond_breaking = gnn_cfg.get('use_bond_breaking', False)
+
+        # BDE-aware prediction: use BDE to improve spectrum prediction during inference
+        # This is different from just using BDE as an auxiliary task
+        self.use_bde_aware_prediction = gnn_cfg.get('use_bde_aware_prediction', False)
+
         if self.use_bond_breaking:
             self.bond_breaking = BondBreakingAttention(
                 node_dim=gnn_cfg['hidden_dim'],
@@ -251,9 +344,9 @@ class TeacherModel(nn.Module):
 
             # BDE prediction head for pretraining (NEW)
             # Predicts: BDE value (1 scalar) from bond-breaking attention
-            # QC-GN2oMS2 vs NExtIMS v2.0:
-            # - QC-GN2oMS2: BDE as input feature (static)
-            # - NExtIMS v2.0: BDE learned via regression (THIS HEAD)
+            # QC-GN2oMS2 vs NExtIMS v2.1:
+            # - QC-GN2oMS2: BDE as input feature (static, from QC)
+            # - NExtIMS v2.1: BDE learned via regression AND used for spectrum prediction
             self.bde_prediction_head = nn.Sequential(
                 nn.Linear(2 * gnn_cfg['hidden_dim'] + gnn_cfg['edge_dim'], 256),
                 nn.ReLU(),
@@ -265,6 +358,12 @@ class TeacherModel(nn.Module):
                 nn.Sigmoid()  # Normalized to [0, 1]
             )
 
+            # Bond-aware pooling for fragmentation-aware embeddings
+            if self.use_bde_aware_prediction:
+                self.bond_aware_pooling = BondAwarePooling(
+                    hidden_dim=gnn_cfg['hidden_dim']
+                )
+
         # ECFP Branch
         self.ecfp_branch = ECFPBranch(
             fingerprint_size=ecfp_cfg['fingerprint_size'],
@@ -274,7 +373,14 @@ class TeacherModel(nn.Module):
         )
 
         # Fusion
-        fusion_dim = config['model']['teacher']['fusion_dim']  # GNN(768) + ECFP(512) = 1280
+        # Base: GNN(768) + ECFP(512) = 1280
+        # With BDE-aware: GNN(768) + FragAware(256) + ECFP(512) = 1536
+        base_fusion_dim = config['model']['teacher']['fusion_dim']
+        if self.use_bde_aware_prediction and self.use_bond_breaking:
+            # Add fragmentation-aware embedding dimension
+            fusion_dim = base_fusion_dim + gnn_cfg['hidden_dim']
+        else:
+            fusion_dim = base_fusion_dim
 
         # Prediction Head
         hidden_dims = pred_cfg['hidden_dims']
@@ -304,23 +410,28 @@ class TeacherModel(nn.Module):
 
     def forward(self, graph_data, ecfp, dropout=False, return_bond_predictions=False, return_bde_predictions=False):
         """
-        Forward pass
+        Forward pass with BDE-aware prediction support
 
         Args:
             graph_data: PyG Data object with x, edge_index, edge_attr, batch
             ecfp: ECFP4 fingerprint [batch_size, 4096]
             dropout: Whether to apply dropout (for MC Dropout)
             return_bond_predictions: Whether to return bond predictions (for Bond Masking pretraining)
-            return_bde_predictions: Whether to return BDE predictions (for BDE Regression pretraining, NEW)
+            return_bde_predictions: Whether to return BDE predictions (for BDE Regression, ALWAYS True for BDE-aware mode)
 
         Returns:
             spectrum: Predicted spectrum [batch_size, output_dim]
             bond_predictions: Bond masking predictions [num_masked_bonds, 4] (optional, Bond Masking)
-            bde_predictions: BDE predictions [num_edges, 1] (optional, BDE Regression, NEW)
+            bde_predictions: BDE predictions [num_edges, 1] (optional or always if use_bde_aware_prediction)
         """
-        # GNN Branch
-        need_node_features = (return_bond_predictions or return_bde_predictions) and self.use_bond_breaking
+        # Determine if we need node features for BDE-aware prediction or auxiliary tasks
+        need_node_features = (
+            self.use_bde_aware_prediction or
+            return_bond_predictions or
+            return_bde_predictions
+        ) and self.use_bond_breaking
 
+        # GNN Branch
         if need_node_features:
             gnn_emb, node_features, edge_index_processed, edge_attr_emb, edge_mask = self.gnn_branch(
                 graph_data.x,
@@ -339,13 +450,48 @@ class TeacherModel(nn.Module):
                 dropout=dropout
             )  # [batch_size, 768]
 
+        # BDE-aware prediction: use bond breaking information to improve spectrum prediction
+        bde_predictions = None
+        fragmentation_aware_emb = None
+
+        if self.use_bde_aware_prediction and self.use_bond_breaking and need_node_features:
+            # 1. Predict bond-breaking probabilities
+            bond_probs = self.bond_breaking(
+                node_features,
+                edge_index_processed,
+                edge_attr_emb
+            )  # [E', 1]
+
+            # 2. Predict BDE values for all edges
+            row, col = edge_index_processed
+            node_i = node_features[row]  # [E', hidden_dim]
+            node_j = node_features[col]  # [E', hidden_dim]
+            edge_features = torch.cat([node_i, node_j, edge_attr_emb], dim=-1)
+            bde_predictions = self.bde_prediction_head(edge_features)  # [E', 1]
+
+            # 3. Create fragmentation-aware graph embeddings using bond-breaking probabilities
+            # This incorporates knowledge of which bonds are likely to break
+            fragmentation_aware_emb = self.bond_aware_pooling(
+                node_features,
+                edge_index_processed,
+                bond_probs,
+                graph_data.batch
+            )  # [batch_size, hidden_dim]
+
         # ECFP Branch
         ecfp_emb = self.ecfp_branch(ecfp)  # [batch_size, 512]
 
-        # Fusion
-        fused = torch.cat([gnn_emb, ecfp_emb], dim=-1)  # [batch_size, 1280]
+        # Fusion: combine GNN, fragmentation-aware (if enabled), and ECFP embeddings
+        if fragmentation_aware_emb is not None:
+            # Enhanced fusion with fragmentation knowledge
+            # GNN(768) + FragAware(256) + ECFP(512) = 1536
+            fused = torch.cat([gnn_emb, fragmentation_aware_emb, ecfp_emb], dim=-1)
+        else:
+            # Standard fusion
+            # GNN(768) + ECFP(512) = 1280
+            fused = torch.cat([gnn_emb, ecfp_emb], dim=-1)
 
-        # Prediction
+        # Spectrum Prediction
         spectrum = self.prediction_head(fused)  # [batch_size, output_dim]
 
         # Bond masking predictions (for pretraining)
@@ -386,8 +532,10 @@ class TeacherModel(nn.Module):
 
             return spectrum, bond_predictions
 
-        # BDE predictions (for BDE Regression pretraining, NEW)
-        if return_bde_predictions and self.use_bond_breaking:
+        # BDE predictions (for BDE Regression auxiliary task)
+        # If BDE-aware prediction is enabled, bde_predictions is already computed above
+        # Otherwise, compute it only when explicitly requested
+        if return_bde_predictions and self.use_bond_breaking and bde_predictions is None:
             # Compute edge-level features for BDE prediction
             row, col = edge_index_processed
             node_i = node_features[row]  # [E', hidden_dim]
@@ -397,18 +545,20 @@ class TeacherModel(nn.Module):
             edge_features = torch.cat([node_i, node_j, edge_attr_emb], dim=-1)
             # [E', 2*hidden_dim + edge_dim]
 
-            # Predict BDE for all edges (not just masked)
+            # Predict BDE for all edges
             bde_predictions = self.bde_prediction_head(edge_features)  # [E', 1]
 
-            # QC-GN2oMS2 vs NExtIMS v2.0 Comparison:
-            # QC-GN2oMS2: BDE is an INPUT feature (static, precomputed)
-            # NExtIMS v2.0: BDE is PREDICTED (dynamic, learned)
+        # Return BDE predictions if requested or if BDE-aware mode is enabled
+        if return_bde_predictions or (self.use_bde_aware_prediction and bde_predictions is not None):
+            # QC-GN2oMS2 vs NExtIMS v2.1 Comparison:
+            # QC-GN2oMS2: BDE as INPUT feature (static, from QC calculations)
+            # NExtIMS v2.1: BDE PREDICTED and USED for spectrum prediction
             #
             # This allows the model to:
             # 1. Learn chemical patterns that determine BDE
-            # 2. Generalize better to new molecules
-            # 3. Capture complex interactions missed by ALFABET
-
+            # 2. Use BDE knowledge to improve fragmentation prediction
+            # 3. Generalize better to new molecules
+            # 4. Capture complex interactions in a physically-grounded way
             return spectrum, bde_predictions
 
         return spectrum

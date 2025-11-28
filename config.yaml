@@ -80,6 +80,10 @@ model:
       drop_edge: 0.2             # DropEdge for over-smoothing
       use_pair_norm: true        # PairNorm
       use_bond_breaking: true    # Bond-Breaking Attention
+      use_bde_aware_prediction: true  # Use BDE to improve spectrum prediction (NEW in v2.1)
+                                      # When enabled, bond-breaking probabilities and BDE predictions
+                                      # are used to create fragmentation-aware embeddings during
+                                      # spectrum prediction, improving accuracy (inspired by QC-GN2oMS2)
 
     # ECFP Branch
     ecfp:
@@ -89,7 +93,8 @@ model:
       dropout: 0.3
 
     # Fusion
-    fusion_dim: 1280             # GNN(768) + ECFP(512)
+    fusion_dim: 1280             # Base: GNN(768) + ECFP(512) = 1280
+                                 # With BDE-aware: GNN(768) + FragAware(256) + ECFP(512) = 1536 (auto-adjusted)
 
     # Prediction Head
     prediction:
