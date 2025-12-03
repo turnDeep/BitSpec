@@ -695,7 +695,8 @@ def main():
 
     # Load test data
     logger.info(f"Loading NIST data from {args.nist_msp}")
-    all_entries = parse_msp_file(args.nist_msp)
+    mol_files_dir = "data/mol_files"
+    all_entries = parse_msp_file(args.nist_msp, mol_files_dir=mol_files_dir)
 
     # Use last 10% as test set (or specify test split)
     test_size = int(len(all_entries) * 0.1)
