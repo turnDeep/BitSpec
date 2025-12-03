@@ -99,22 +99,33 @@ def parse_msp_file(msp_path: str) -> List[Dict]:
     return entries
 
 
-def peaks_to_spectrum(peaks: List[Tuple[float, float]], max_mz: int = 500) -> np.ndarray:
+def peaks_to_spectrum(
+    peaks: List[Tuple[float, float]],
+    min_mz: int = 1,
+    max_mz: int = 1000
+) -> np.ndarray:
     """
-    Convert peak list to binned spectrum [0, 500] -> [501]
+    Convert peak list to binned spectrum [1, 1000] -> [1000]
+
+    NExtIMS v4.2 Update:
+    - Changed from m/z 0-500 (501 dims) to m/z 1-1000 (1000 dims)
+    - Better coverage for higher molecular weight compounds
+    - 1 Da resolution maintained
 
     Args:
         peaks: List of (mz, intensity) tuples
-        max_mz: Maximum m/z value
+        min_mz: Minimum m/z value (default: 1)
+        max_mz: Maximum m/z value (default: 1000)
 
     Returns:
-        spectrum: Binned spectrum array [501]
+        spectrum: Binned spectrum array [1000] for m/z 1-1000
     """
-    spectrum = np.zeros(max_mz + 1, dtype=np.float32)
+    spectrum_size = max_mz - min_mz + 1
+    spectrum = np.zeros(spectrum_size, dtype=np.float32)
 
     for mz, intensity in peaks:
-        if 0 <= mz <= max_mz:
-            bin_idx = int(round(mz))
+        if min_mz <= mz <= max_mz:
+            bin_idx = int(round(mz)) - min_mz
             spectrum[bin_idx] = max(spectrum[bin_idx], intensity)
 
     # Normalize to [0, 1]

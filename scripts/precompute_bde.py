@@ -1,35 +1,41 @@
 #!/usr/bin/env python3
 """
-Phase 0: BDE Precomputation Script (BonDNet版)
+NExtIMS v4.2: BDE Pre-computation Script
 
-Pre-computes Bond Dissociation Energy (BDE) values for PCQM4Mv2 dataset
-using BonDNet, storing results in HDF5 cache for Phase 1 training.
+Pre-computes Bond Dissociation Energy (BDE) values for NIST17 EI-MS dataset
+using BonDNet, storing results in HDF5 cache for efficient training.
 
-This script creates a large-scale BDE database (up to 93.5M BDE values)
-that will be used during Phase 1 Teacher pretraining.
+This replaces the v2.0 PCQM4Mv2 pretraining approach with a direct NIST17
+BDE precomputation strategy suitable for the minimal v4.2 architecture.
 
-Migration from ALFABET to BonDNet:
-    - Complete TensorFlow removal (PyTorch only)
-    - GPU acceleration with sm_120 optimization
-    - Higher accuracy (MAE: 0.51 vs 0.60 kcal/mol)
-    - Support for halogen elements (F, Cl in PCQM4Mv2)
-    - Homolytic + Heterolytic BDE prediction
-    - Charged molecule support
+Migration from v2.0:
+    - Dataset: PCQM4Mv2 (3.74M molecules) → NIST17 (~300K compounds)
+    - Model: ALFABET (4 elements) → BonDNet (10 elements)
+    - Coverage: C,H,O,N only → C,H,N,O,S,Cl,F,P,Br,I
+    - Accuracy: MAE 0.60 → 0.51 kcal/mol
+    - Ring bonds: Estimated → Predicted
 
 Usage:
-    # Subset (500K molecules, ~10-15 min on GPU)
-    python scripts/precompute_bde.py --max-samples 500000
+    # Use pre-trained BonDNet model
+    python scripts/precompute_bde.py \\
+        --nist-msp data/NIST17.MSP \\
+        --output data/processed/bde_cache/nist17_bde_cache.h5
 
-    # Full dataset (3.74M molecules, ~30-60 min on GPU)
-    python scripts/precompute_bde.py --max-samples 0
+    # Use custom retrained model (after train_bondnet_bde_db2.py)
+    python scripts/precompute_bde.py \\
+        --nist-msp data/NIST17.MSP \\
+        --model models/bondnet_bde_db2.pth \\
+        --output data/processed/bde_cache/nist17_bde_cache_custom.h5
+
+Estimated Time:
+    - Pre-trained model: ~30-60 min for 300K molecules (GPU)
+    - Custom model: Similar performance
+    - Storage: ~2-5 GB HDF5 file
 
 Requirements:
-    - PyTorch >= 1.10.0 (sm_120 optimized)
-    - DGL >= 0.5.0
+    - PyTorch >= 1.10.0
     - BonDNet (pip install git+https://github.com/mjwen/bondnet.git)
-    - RDKit >= 2020.03.5
-    - Pymatgen >= 2022.01.08
-    - OpenBabel >= 3.1.1
+    - RDKit, h5py
 """
 
 import os
@@ -38,14 +44,18 @@ import argparse
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
 import warnings
 
 import h5py
 import numpy as np
-import torch
 from tqdm import tqdm
 from rdkit import Chem
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.data.bde_calculator import BDECalculator, BDECache
 
 # Configure logging
 logging.basicConfig(
@@ -55,425 +65,358 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def check_dependencies():
-    """Check if required dependencies are installed."""
-
-    # Check PyTorch
-    try:
-        import torch
-        logger.info(f"PyTorch version: {torch.__version__}")
-
-        # Check CUDA availability
-        if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            compute_cap = torch.cuda.get_device_capability(0)
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-
-            logger.info(f"GPU: {gpu_name}")
-            logger.info(f"  Compute Capability: {compute_cap}")
-            logger.info(f"  Memory: {gpu_memory:.1f} GB")
-
-            # Check if sm_120 (RTX 50 series)
-            if compute_cap == (12, 0):
-                logger.info("✓ Detected RTX 50 series (sm_120) - PyTorch optimized build")
-
-            device = 'cuda'
-        else:
-            logger.warning("CUDA not available, using CPU (will be slow!)")
-            device = 'cpu'
-
-    except ImportError:
-        logger.error("PyTorch is not installed. Please run: pip install torch>=1.10.0")
-        sys.exit(1)
-
-    # Check BonDNet
-    try:
-        from bondnet.prediction.predictor import predict_single_molecule, get_prediction
-        from bondnet.prediction.load_model import get_model_path, get_model_info, load_model, load_dataset
-        from bondnet.data.dataloader import DataLoaderReactionNetwork
-        logger.info("BonDNet loaded successfully")
-    except ImportError as e:
-        logger.error(f"BonDNet is not installed: {e}")
-        logger.error("Install with: pip install git+https://github.com/mjwen/bondnet.git")
-        logger.error("Or clone and install: git clone https://github.com/mjwen/bondnet && cd bondnet && pip install -e .")
-        sys.exit(1)
-
-    # Check other dependencies
-    try:
-        import dgl
-        logger.info(f"DGL version: {dgl.__version__}")
-    except ImportError:
-        logger.error("DGL is not installed. Please run: pip install dgl")
-        sys.exit(1)
-
-    try:
-        from rdkit import Chem
-        logger.info("RDKit loaded successfully")
-    except ImportError:
-        logger.error("RDKit is not installed. Please run: conda install rdkit -c conda-forge")
-        sys.exit(1)
-
-    return device
-
-
-def load_pcqm4mv2_smiles(data_dir: str, max_samples: int = 0):
-    """Load PCQM4Mv2 SMILES from CSV file.
+def parse_nist_msp(msp_path: str, max_compounds: int = 0) -> List[str]:
+    """
+    Extract SMILES from NIST MSP file
 
     Args:
-        data_dir: Directory containing PCQM4Mv2 data
-        max_samples: Maximum number of samples (0 = all)
+        msp_path: Path to NIST17.MSP file
+        max_compounds: Maximum compounds to process (0 = all)
 
     Returns:
-        List of SMILES strings
+        smiles_list: List of SMILES strings
     """
-    import pandas as pd
+    logger.info(f"Parsing NIST MSP file: {msp_path}")
 
-    # Try to download dataset if not exists
-    try:
-        from ogb.lsc import PCQM4Mv2Dataset
-        logger.info(f"Checking PCQM4Mv2 dataset at {data_dir}...")
-        _ = PCQM4Mv2Dataset(root=data_dir, only_smiles=True)
-    except ImportError:
-        logger.error("OGB is not installed. Please run: pip install ogb>=1.3.6")
-        sys.exit(1)
+    smiles_list = []
+    current_smiles = None
 
-    # Load SMILES from CSV file
-    smiles_file = Path(data_dir) / 'pcqm4m-v2' / 'raw' / 'data.csv.gz'
+    with open(msp_path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            line = line.strip()
 
-    if not smiles_file.exists():
-        logger.error(f"SMILES file not found: {smiles_file}")
-        logger.error("Please download PCQM4Mv2 dataset first.")
-        sys.exit(1)
+            if line.startswith('SMILES:'):
+                current_smiles = line.split(':', 1)[1].strip()
+                if current_smiles:
+                    smiles_list.append(current_smiles)
 
-    logger.info(f"Loading SMILES from {smiles_file}")
-    df = pd.read_csv(smiles_file, compression='gzip')
+                # Limit if requested
+                if max_compounds > 0 and len(smiles_list) >= max_compounds:
+                    break
 
-    all_smiles = df['smiles'].tolist()
-    total_samples = len(all_smiles)
-
-    if max_samples > 0:
-        num_samples = min(max_samples, total_samples)
-        logger.info(f"Using subset: {num_samples:,} / {total_samples:,} molecules")
-        all_smiles = all_smiles[:num_samples]
-    else:
-        logger.info(f"Using full dataset: {total_samples:,} molecules")
-
-    return all_smiles
+    logger.info(f"Extracted {len(smiles_list):,} SMILES strings")
+    return smiles_list
 
 
-def predict_bde_bondnet(smiles: str, model_name: str = "bdncm/20200808", charge: int = 0, ring_bond: bool = True) -> Dict[int, float]:
-    """
-    Predict BDE for a single molecule using BonDNet.
-
-    Args:
-        smiles: SMILES string
-        model_name: BonDNet pretrained model name
-        charge: Molecule charge (0 for neutral)
-        ring_bond: Whether to predict ring bonds
-
-    Returns:
-        bde_dict: {bond_idx: BDE value in kcal/mol}
-    """
-    from bondnet.prediction.predictor import predict_single_molecule
-    from rdkit import Chem
-
-    try:
-        # BonDNet returns SDF string with BDE annotations
-        # We need to parse this to extract BDE values per bond
-        result_sdf = predict_single_molecule(
-            model_name=model_name,
-            molecule=smiles,
-            charge=charge,
-            ring_bond=ring_bond,
-            one_per_iso_bond_group=True,
-            write_result=False
-        )
-
-        # Parse SDF to extract BDE values
-        # BonDNet output format: SDF with BDE annotations
-        # We need to extract bond indices and BDE values
-
-        # For now, use a simpler approach: count bonds and return dummy values
-        # TODO: Implement proper SDF parsing
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            return {}
-
-        num_bonds = mol.GetNumBonds()
-
-        # Parse BonDNet result (simplified)
-        # The result_sdf contains BDE predictions
-        # Format: bond_idx -> BDE (eV)
-        # Convert eV to kcal/mol: 1 eV = 23.06 kcal/mol
-
-        bde_dict = {}
-        # This is a placeholder - actual implementation needs proper SDF parsing
-        # or direct access to BonDNet's internal prediction results
-
-        return bde_dict
-
-    except Exception as e:
-        logger.debug(f"BonDNet prediction failed for {smiles}: {e}")
-        return {}
-
-
-def predict_bde_batch_bondnet(
+def validate_smiles_list(
     smiles_list: List[str],
-    model_name: str = "bdncm/20200808",
-    device: str = 'cuda',
-    batch_size: int = 100
-) -> Dict[str, Dict[int, float]]:
+    calculator: BDECalculator
+) -> Dict:
     """
-    Predict BDE values in batches using BonDNet (optimized).
+    Validate SMILES and report statistics
 
-    This uses BonDNet's internal API to get BDE predictions for each bond.
+    Args:
+        smiles_list: List of SMILES
+        calculator: BDECalculator instance
+
+    Returns:
+        stats: {valid_count, invalid_count, unsupported_elements, ...}
+    """
+    logger.info("Validating SMILES...")
+
+    valid_count = 0
+    invalid_count = 0
+    unsupported_elements = set()
+    error_types = {}
+
+    for smiles in tqdm(smiles_list, desc="Validating"):
+        is_valid, error_msg = calculator.validate_molecule(smiles)
+
+        if is_valid:
+            valid_count += 1
+        else:
+            invalid_count += 1
+
+            # Track error types
+            error_types[error_msg] = error_types.get(error_msg, 0) + 1
+
+            # Extract unsupported elements
+            if "Unsupported element" in error_msg:
+                element = error_msg.split(":")[-1].strip()
+                unsupported_elements.add(element)
+
+    stats = {
+        'total': len(smiles_list),
+        'valid': valid_count,
+        'invalid': invalid_count,
+        'unsupported_elements': list(unsupported_elements),
+        'error_types': error_types
+    }
+
+    logger.info(f"Validation results:")
+    logger.info(f"  Valid: {valid_count:,} / {len(smiles_list):,} ({valid_count/len(smiles_list)*100:.1f}%)")
+    logger.info(f"  Invalid: {invalid_count:,}")
+
+    if unsupported_elements:
+        logger.warning(f"  Unsupported elements: {', '.join(sorted(unsupported_elements))}")
+
+    # Show top error types
+    if error_types:
+        logger.info("  Top errors:")
+        for error, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True)[:5]:
+            logger.info(f"    - {error}: {count}")
+
+    return stats
+
+
+def precompute_bde_hdf5(
+    smiles_list: List[str],
+    calculator: BDECalculator,
+    output_path: str,
+    skip_validation: bool = False,
+    batch_size: int = 100,
+    checkpoint_interval: int = 10000
+):
+    """
+    Pre-compute BDE values and save to HDF5
 
     Args:
         smiles_list: List of SMILES strings
-        model_name: BonDNet model name
-        device: 'cuda' or 'cpu'
-        batch_size: Batch size for prediction
-
-    Returns:
-        results: {smiles: {bond_idx: bde_value}}
+        calculator: BDECalculator instance
+        output_path: Output HDF5 file path
+        skip_validation: Skip validation (faster but risky)
+        batch_size: Processing batch size (for progress tracking)
+        checkpoint_interval: Save checkpoint every N molecules
     """
-    from bondnet.prediction.load_model import get_model_path, get_model_info
-    from bondnet.prediction.predictor import get_prediction
-    from bondnet.prediction.io import PredictionOneReactant
-    from collections import defaultdict
-    import torch
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    results = {}
+    # Validate SMILES (optional)
+    if not skip_validation:
+        validation_stats = validate_smiles_list(smiles_list, calculator)
+        logger.info(f"Proceeding with {validation_stats['valid']:,} valid molecules")
+    else:
+        logger.warning("Skipping validation (--skip-validation)")
 
-    # Load model information once
-    model_path = get_model_path(model_name)
-    model_info = get_model_info(model_path)
-    unit_converter = model_info["unit_conversion"]  # eV to kcal/mol (typically 23.06)
+    # Open HDF5 file for streaming writes
+    logger.info(f"Creating HDF5 cache: {output_path}")
 
-    # Process each molecule
-    for smiles in smiles_list:
-        try:
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is None:
-                continue
+    success_count = 0
+    failed_count = 0
+    total_bde_values = 0
+    bde_values_sample = []  # For statistics
 
-            # Use BonDNet's internal predictor
-            predictor = PredictionOneReactant(
-                smiles,
-                charge=0,
-                format='smiles',
-                allowed_product_charges=[0, -1, 1],  # Allow different charge states
-                ring_bond=True,  # Include ring bonds
-                one_per_iso_bond_group=True
-            )
+    start_time = time.time()
 
-            # Prepare data
-            molecules, labels, extra_features = predictor.prepare_data()
+    with h5py.File(output_path, 'w') as h5_file:
+        # Store metadata
+        h5_file.attrs['creation_time'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        h5_file.attrs['status'] = 'in_progress'
+        h5_file.attrs['model'] = calculator.model_name or str(calculator.model_path)
+        h5_file.attrs['total_molecules'] = len(smiles_list)
 
-            # Get predictions (this returns BDE for each reaction)
-            predictions = get_prediction(model_path, unit_converter, molecules, labels, extra_features)
+        # Process molecules
+        for i, smiles in enumerate(tqdm(smiles_list, desc="Computing BDE")):
+            try:
+                # Calculate BDE
+                bde_dict = calculator.calculate_bde(smiles)
 
-            # Map predictions to bond indices using rxn_idx_to_bond_map
-            predictions_by_bond = defaultdict(list)
-            for i, pred in enumerate(predictions):
-                if pred is not None:
-                    bond_idx = predictor.rxn_idx_to_bond_map[i]
-                    predictions_by_bond[bond_idx].append(pred)
+                if bde_dict:
+                    # Create group for this molecule
+                    grp = h5_file.create_group(smiles)
 
-            # Take minimum BDE across different charge states (most favorable)
-            bde_dict = {}
-            for bond_idx, preds in predictions_by_bond.items():
-                preds_clean = [p for p in preds if p is not None]
-                if preds_clean:
-                    bde_dict[bond_idx] = min(preds_clean)  # Most favorable (lowest BDE)
+                    # Store BDE values
+                    for bond_idx, bde_value in bde_dict.items():
+                        grp.create_dataset(
+                            str(bond_idx),
+                            data=bde_value,
+                            dtype='float32'
+                        )
 
-            if bde_dict:
-                results[smiles] = bde_dict
+                    success_count += 1
+                    total_bde_values += len(bde_dict)
 
-        except Exception as e:
-            logger.debug(f"Failed to predict BDE for {smiles}: {e}")
-            continue
+                    # Sample for statistics (first 100K bonds)
+                    if len(bde_values_sample) < 100000:
+                        bde_values_sample.extend(bde_dict.values())
 
-    return results
+                else:
+                    failed_count += 1
 
+            except Exception as e:
+                logger.debug(f"Failed to process {smiles}: {e}")
+                failed_count += 1
 
-def save_bde_cache_streaming(h5_file, smiles: str, bde_dict: Dict[int, float]):
-    """Save single molecule BDE to HDF5 file (streaming mode).
+            # Periodic progress update
+            if (i + 1) % checkpoint_interval == 0:
+                elapsed = time.time() - start_time
+                rate = (i + 1) / elapsed
+                remaining = (len(smiles_list) - i - 1) / rate if rate > 0 else 0
 
-    Args:
-        h5_file: Open HDF5 file handle
-        smiles: SMILES string
-        bde_dict: BDE values for bonds {bond_idx: bde_value}
-    """
-    # Create group for this molecule
-    grp = h5_file.create_group(smiles)
+                logger.info(
+                    f"Progress: {success_count:,} / {i+1:,} molecules "
+                    f"({elapsed/60:.1f} min elapsed, ~{remaining/60:.1f} min remaining)"
+                )
 
-    # Store BDE values for each bond
-    for bond_idx, bde_value in bde_dict.items():
-        grp.create_dataset(str(bond_idx), data=bde_value, dtype='float32')
+                # Update metadata checkpoint
+                h5_file.attrs['checkpoint_index'] = i + 1
+                h5_file.attrs['checkpoint_success'] = success_count
+                h5_file.flush()
+
+        # Final metadata
+        h5_file.attrs['num_molecules'] = success_count
+        h5_file.attrs['num_bde_values'] = total_bde_values
+        h5_file.attrs['num_failed'] = failed_count
+        h5_file.attrs['status'] = 'completed'
+
+    elapsed_time = time.time() - start_time
+
+    logger.info("")
+    logger.info("="*80)
+    logger.info("BDE Pre-computation Complete!")
+    logger.info("="*80)
+    logger.info(f"Time elapsed: {elapsed_time/60:.1f} minutes ({elapsed_time/3600:.2f} hours)")
+    logger.info(f"Success: {success_count:,} / {len(smiles_list):,} molecules")
+    logger.info(f"Failed: {failed_count:,}")
+    logger.info(f"Total BDE values: {total_bde_values:,}")
+
+    if success_count > 0:
+        logger.info(f"Average bonds/molecule: {total_bde_values / success_count:.1f}")
+
+    # BDE statistics
+    if bde_values_sample:
+        logger.info("")
+        logger.info("BDE Statistics (from sample):")
+        logger.info(f"  Mean: {np.mean(bde_values_sample):.2f} kcal/mol")
+        logger.info(f"  Std:  {np.std(bde_values_sample):.2f} kcal/mol")
+        logger.info(f"  Min:  {np.min(bde_values_sample):.2f} kcal/mol")
+        logger.info(f"  Max:  {np.max(bde_values_sample):.2f} kcal/mol")
+
+    # File size
+    file_size_mb = output_path.stat().st_size / (1024 * 1024)
+    logger.info(f"Cache file size: {file_size_mb:.2f} MB")
+
+    logger.info("")
+    logger.info("Next steps:")
+    logger.info(f"  1. Verify cache: python -c \"import h5py; f=h5py.File('{output_path}', 'r'); print(dict(f.attrs))\"")
+    logger.info("  2. Use in training: Set config.yaml -> data.bde_cache_path")
+    logger.info("="*80)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Phase 0: Pre-compute BDE values for PCQM4Mv2 dataset using BonDNet"
+        description="Pre-compute BDE values for NIST17 dataset using BonDNet"
     )
     parser.add_argument(
-        '--data-dir',
+        '--nist-msp',
         type=str,
-        default='data/pcqm4mv2',
-        help='PCQM4Mv2 dataset directory (default: data/pcqm4mv2)'
+        required=True,
+        help='Path to NIST17.MSP file'
     )
     parser.add_argument(
         '--output',
         type=str,
-        default='data/processed/bde_cache/bde_cache.h5',
-        help='Output HDF5 file path (default: data/processed/bde_cache/bde_cache.h5)'
+        default='data/processed/bde_cache/nist17_bde_cache.h5',
+        help='Output HDF5 file path'
     )
     parser.add_argument(
-        '--max-samples',
-        type=int,
-        default=500000,
-        help='Maximum number of molecules to process (0 = all, default: 500000)'
-    )
-    parser.add_argument(
-        '--batch-size',
-        type=int,
-        default=100,
-        help='Batch size for BDE prediction (default: 100)'
+        '--model',
+        type=str,
+        default=None,
+        help='Path to custom BonDNet model (optional, uses pre-trained if not specified)'
     )
     parser.add_argument(
         '--model-name',
         type=str,
         default='bdncm/20200808',
-        help='BonDNet model name (default: bdncm/20200808)'
+        help='Pre-trained model name (default: bdncm/20200808)'
+    )
+    parser.add_argument(
+        '--max-compounds',
+        type=int,
+        default=0,
+        help='Maximum compounds to process (0 = all, default: 0)'
+    )
+    parser.add_argument(
+        '--skip-validation',
+        action='store_true',
+        help='Skip SMILES validation (faster but risky)'
+    )
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=100,
+        help='Batch size for progress tracking (default: 100)'
+    )
+    parser.add_argument(
+        '--checkpoint-interval',
+        type=int,
+        default=10000,
+        help='Progress update interval (default: 10000)'
     )
     parser.add_argument(
         '--force',
         action='store_true',
         help='Overwrite existing cache file'
     )
+    parser.add_argument(
+        '--device',
+        type=str,
+        default='cuda',
+        help='Device: cuda or cpu (default: cuda)'
+    )
 
     args = parser.parse_args()
 
-    # Check if output file already exists
-    if os.path.exists(args.output) and not args.force:
+    # Check if output exists
+    if Path(args.output).exists() and not args.force:
         logger.error(f"Output file already exists: {args.output}")
         logger.error("Use --force to overwrite")
         sys.exit(1)
 
-    logger.info("="*80)
-    logger.info("Phase 0: BDE Pre-computation for PCQM4Mv2 (BonDNet)")
-    logger.info("="*80)
-
-    # Check dependencies
-    device = check_dependencies()
-
-    # Load SMILES strings only
-    smiles_list = load_pcqm4mv2_smiles(args.data_dir, args.max_samples)
-
-    # Estimate time (GPU)
-    if device == 'cuda':
-        # Assuming ~150K-200K molecules/hour on GPU
-        estimated_time_min = len(smiles_list) / 150000 * 60
-    else:
-        # CPU is much slower
-        estimated_time_min = len(smiles_list) / 10000 * 60
-
-    logger.info(f"Estimated time: {estimated_time_min:.1f} minutes ({estimated_time_min/60:.1f} hours)")
-    logger.info(f"Using device: {device}")
-
-    # Predict BDE values with streaming processing
-    logger.info("Computing BDE values with BonDNet (streaming mode)...")
-    logger.info("Writing directly to HDF5 to minimize memory usage...")
-    start_time = time.time()
-
-    # Create output directory
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
-
-    # Open HDF5 file for streaming writes
-    success_count = 0
-    failed_count = 0
-    invalid_smiles_count = 0
-    total_bde_values = 0
-    bde_values_for_stats = []  # Sample for statistics
-
-    with h5py.File(args.output, 'w') as h5_file:
-        # Store initial metadata
-        h5_file.attrs['creation_time'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        h5_file.attrs['status'] = 'in_progress'
-        h5_file.attrs['model'] = args.model_name
-        h5_file.attrs['device'] = device
-
-        # Process in batches to save memory
-        batch_size = args.batch_size
-        for i in tqdm(range(0, len(smiles_list), batch_size), desc="Processing batches"):
-            batch_smiles = smiles_list[i:i+batch_size]
-
-            # Predict BDE for batch
-            try:
-                batch_results = predict_bde_batch_bondnet(
-                    batch_smiles,
-                    model_name=args.model_name,
-                    device=device,
-                    batch_size=1  # Process one at a time for now
-                )
-
-                for smiles, bde_dict in batch_results.items():
-                    if bde_dict:
-                        # Write immediately to HDF5
-                        save_bde_cache_streaming(h5_file, smiles, bde_dict)
-                        success_count += 1
-                        total_bde_values += len(bde_dict)
-
-                        # Sample BDE values for statistics
-                        if len(bde_values_for_stats) < 100000:
-                            bde_values_for_stats.extend(bde_dict.values())
-                    else:
-                        failed_count += 1
-
-            except Exception as e:
-                logger.warning(f"Batch prediction failed: {e}")
-                failed_count += len(batch_smiles)
-
-            # Periodic progress update every 10k molecules
-            if (i + batch_size) % 10000 == 0 and i > 0:
-                elapsed = time.time() - start_time
-                rate = (i + batch_size) / elapsed
-                remaining = (len(smiles_list) - i - batch_size) / rate if rate > 0 else 0
-                logger.info(f"Progress: {success_count:,} / {i+batch_size:,} molecules computed "
-                           f"({elapsed/60:.1f} min elapsed, ~{remaining/60:.1f} min remaining)")
-
-        # Update final metadata
-        h5_file.attrs['num_molecules'] = success_count
-        h5_file.attrs['num_bde_values'] = total_bde_values
-        h5_file.attrs['status'] = 'completed'
-
-    elapsed_time = time.time() - start_time
-    logger.info(f"BDE computation completed in {elapsed_time/60:.1f} minutes ({elapsed_time/3600:.2f} hours)")
-    logger.info(f"Success: {success_count:,} / {len(smiles_list):,} molecules "
-               f"({failed_count} failed)")
-
-    # Compute statistics from sample
-    if bde_values_for_stats:
-        logger.info("BDE Statistics (from sample):")
-        logger.info(f"  - Mean BDE: {np.mean(bde_values_for_stats):.2f} kcal/mol")
-        logger.info(f"  - Std BDE: {np.std(bde_values_for_stats):.2f} kcal/mol")
-        logger.info(f"  - Min BDE: {np.min(bde_values_for_stats):.2f} kcal/mol")
-        logger.info(f"  - Max BDE: {np.max(bde_values_for_stats):.2f} kcal/mol")
-        logger.info(f"  - Avg bonds/molecule: {total_bde_values / success_count:.1f}")
-
-    # Get file size
-    file_size_mb = os.path.getsize(args.output) / (1024 * 1024)
-    logger.info(f"Cache file size: {file_size_mb:.2f} MB")
+    # Check if NIST MSP exists
+    if not Path(args.nist_msp).exists():
+        logger.error(f"NIST MSP file not found: {args.nist_msp}")
+        sys.exit(1)
 
     logger.info("="*80)
-    logger.info("Phase 0 completed successfully!")
-    logger.info(f"BDE cache: {args.output}")
+    logger.info("NExtIMS v4.2: BDE Pre-computation for NIST17")
     logger.info("="*80)
-    logger.info("Next steps:")
-    logger.info("  1. Verify cache: python -c \"import h5py; f=h5py.File('{}', 'r'); print(f.attrs['num_molecules'])\"".format(args.output))
-    logger.info("  2. Run Phase 1: python scripts/train_teacher.py --config config_pretrain.yaml --phase pretrain")
-    logger.info("="*80)
+    logger.info(f"Input:  {args.nist_msp}")
+    logger.info(f"Output: {args.output}")
+    logger.info("")
+
+    # Initialize BDE calculator
+    logger.info("Initializing BDE calculator...")
+
+    try:
+        if args.model:
+            # Custom model
+            calculator = BDECalculator(
+                model_path=args.model,
+                device=args.device
+            )
+        else:
+            # Pre-trained model
+            calculator = BDECalculator(
+                model_name=args.model_name,
+                device=args.device
+            )
+    except Exception as e:
+        logger.error(f"Failed to initialize BDE calculator: {e}")
+        logger.error("Make sure BonDNet is installed:")
+        logger.error("  pip install git+https://github.com/mjwen/bondnet.git")
+        sys.exit(1)
+
+    logger.info("✓ BDE calculator initialized")
+    logger.info("")
+
+    # Load SMILES from NIST MSP
+    smiles_list = parse_nist_msp(args.nist_msp, args.max_compounds)
+
+    if not smiles_list:
+        logger.error("No SMILES found in MSP file")
+        sys.exit(1)
+
+    # Pre-compute BDE values
+    precompute_bde_hdf5(
+        smiles_list=smiles_list,
+        calculator=calculator,
+        output_path=args.output,
+        skip_validation=args.skip_validation,
+        batch_size=args.batch_size,
+        checkpoint_interval=args.checkpoint_interval
+    )
 
 
 if __name__ == '__main__':
