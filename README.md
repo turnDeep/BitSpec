@@ -1,4 +1,4 @@
-# NExtIMS v4.2 - Minimal Configuration EI-MS Prediction System
+# NExtIMS - Minimal Configuration EI-MS Prediction System
 
 次世代の電子衝撃イオン化マススペクトル（EI-MS）予測システム。QC-GN2oMS2の実証済みアプローチに基づく最小構成から開始し、反復改善で性能を向上させます。
 
