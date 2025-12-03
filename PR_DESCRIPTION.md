@@ -2,7 +2,7 @@
 
 ## Summary
 
-This PR updates the configuration to match the v4.2 specification based on the "Start Simple, Iterate Based on Evidence" design philosophy.
+This PR updates the configuration and setup to match the v4.2 specification based on the "Start Simple, Iterate Based on Evidence" design philosophy.
 
 ## Changes
 
@@ -50,23 +50,6 @@ top_10_recall:
   insufficient: < 0.75
 ```
 
-#### Removed Complex Features
-- ❌ Teacher-Student Knowledge Distillation settings
-- ❌ MoE (Mixture of Experts) configuration
-- ❌ Multitask learning (BDE auxiliary task)
-- ❌ MC Dropout uncertainty estimation
-- ❌ Complex memory efficient mode settings
-- ❌ Label Distribution Smoothing (LDS)
-- ❌ Data augmentation (isotope, conformer)
-
-#### Added New Sections
-- ✅ Inference configuration (Phase 5)
-- ✅ Experiment tracking
-- ✅ Performance profiling
-- ✅ System information
-- ✅ Meta information with design philosophy
-- ✅ Clear performance targets
-
 ### 2. Add Configuration Changes Documentation (commit ba6cdd8)
 
 Created comprehensive documentation: `docs/CONFIG_v4.2_CHANGES.md` (464 lines)
@@ -80,7 +63,49 @@ Created comprehensive documentation: `docs/CONFIG_v4.2_CHANGES.md` (464 lines)
 - FAQ section
 - Compatibility notes
 
-### 3. Update README.md
+### 3. Update setup.py to v4.2 Specification (commit eebe17e)
+
+**Package Configuration**:
+- Version: 1.0.0 → **4.2.0**
+- Name: ms_predictor → **nextims**
+- URL: Updated to https://github.com/turnDeep/NExtIMS
+- Author: Updated to turnDeep
+
+**Command-line Tools** (New):
+```bash
+nextims-train          # GNN model training
+nextims-evaluate       # Model evaluation
+nextims-predict        # Single molecule prediction
+nextims-predict-batch  # Batch prediction from CSV
+```
+
+**Entry Points**:
+- `nextims-train` → `scripts.train_gnn_minimal:main`
+- `nextims-evaluate` → `scripts.evaluate_minimal:main`
+- `nextims-predict` → `scripts.predict_single:main`
+- `nextims-predict-batch` → `scripts.predict_batch:main`
+
+**Classifiers**:
+- Python 3.10, 3.11, 3.12 support
+- Added AI/ML topics
+- Operating System Independent
+
+### 4. Add Installation Guide (commit eebe17e)
+
+Created comprehensive documentation: `docs/INSTALLATION.md` (430 lines)
+
+**Contents**:
+- System requirements (hardware/software)
+- 3 installation methods (dev/normal/minimal)
+- Command-line tools usage examples
+- RTX 50 series specific setup
+- Troubleshooting guide (5 common errors)
+- Uninstallation procedures
+- Environment variables
+- Docker setup
+- Developer setup (testing, pre-commit)
+
+### 5. Update README.md
 
 Updated NIST17 data structure description to match current implementation.
 
@@ -108,24 +133,45 @@ v4.2: "Start Simple, Iterate Based on Evidence"
 - Iterate based on evidence from evaluation results
 - Add complexity only when justified by data
 
-## Configuration Structure
+## Installation & Usage
 
-### v4.2 Sections (15 total)
+### Installation
 
-1. **project** - Project metadata
-2. **data** - NIST17 data paths and settings
-3. **model** - QCGN2oEI_Minimal configuration
-4. **training** - Single-phase training settings
-5. **gpu** - RTX 5070 Ti optimization
-6. **cpu** - Ryzen 7700 optimization
-7. **evaluation** - Metrics and performance targets
-8. **inference** - Single/batch prediction settings
-9. **logging** - Logging configuration
-10. **bde** - BDE cache settings
-11. **experiment** - Experiment tracking
-12. **performance** - Profiling settings
-13. **system** - Hardware information
-14. **meta** - Design philosophy and documentation links
+```bash
+# Development mode (recommended)
+git clone https://github.com/turnDeep/NExtIMS.git
+cd NExtIMS
+pip install -e .
+```
+
+### Command-line Tools
+
+```bash
+# Training
+nextims-train \
+    --nist-msp data/NIST17.MSP \
+    --bde-cache data/processed/bde_cache/nist17_bde_cache.h5 \
+    --output models/qcgn2oei_minimal_best.pth \
+    --epochs 300 \
+    --batch-size 32
+
+# Evaluation
+nextims-evaluate \
+    --model models/qcgn2oei_minimal_best.pth \
+    --nist-msp data/NIST17.MSP \
+    --visualize --benchmark
+
+# Prediction (single)
+nextims-predict \
+    --smiles "CCO" \
+    --model models/qcgn2oei_minimal_best.pth
+
+# Prediction (batch)
+nextims-predict-batch \
+    --input molecules.csv \
+    --model models/qcgn2oei_minimal_best.pth \
+    --output predictions.csv
+```
 
 ## Breaking Changes
 
@@ -146,9 +192,9 @@ Users upgrading from v2.0 should:
    - Update training scripts
 
 3. **Update training workflow**
-   - Use `scripts/train_gnn_minimal.py` instead of `train_teacher.py` / `train_student.py`
-   - Use `scripts/evaluate_minimal.py` for evaluation
-   - Use `scripts/predict_single.py` / `predict_batch.py` for inference
+   - Use `nextims-train` instead of separate teacher/student scripts
+   - Use `nextims-evaluate` for evaluation
+   - Use `nextims-predict` / `nextims-predict-batch` for inference
 
 ### Incompatible Changes
 
@@ -169,14 +215,20 @@ The following v2.0 features are **not available** in v4.2:
 - ✅ Training scripts compatible with new config
 - ✅ Evaluation scripts compatible with new config
 - ✅ Documentation references are correct
+- ✅ setup.py version: 4.2.0
+- ✅ All 4 packages detected: models, data, training, evaluation
+- ✅ Command-line tools functional
 
 ## Documentation
 
 **Created**:
-- ✅ `docs/CONFIG_v4.2_CHANGES.md` (464 lines) - Comprehensive migration guide
+- ✅ `docs/CONFIG_v4.2_CHANGES.md` (464 lines) - Configuration migration guide
+- ✅ `docs/INSTALLATION.md` (430 lines) - Comprehensive installation guide
+- ✅ `PR_DESCRIPTION.md` (277 lines) - Pull request description template
 
 **Updated**:
 - ✅ `config.yaml` (318 lines) - Complete v4.2 configuration
+- ✅ `setup.py` (84 lines) - Package setup for v4.2
 - ✅ `README.md` - NIST17 data structure clarification
 
 **References**:
@@ -189,19 +241,27 @@ The following v2.0 features are **not available** in v4.2:
 
 1. `37629cd` - Update config.yaml to match v4.2 specification
 2. `ba6cdd8` - Add comprehensive config.yaml v4.2 changes documentation
+3. `d1d5899` - Add pull request description template
+4. `eebe17e` - Update setup.py to v4.2 specification and add installation guide
 
 ## Files Changed
 
 ```
+ PR_DESCRIPTION.md           | 277 insertions (new file)
  README.md                   |  10 +-
  config.yaml                 | 537 ++++++++++++++++++++++++----------
- docs/CONFIG_v4.2_CHANGES.md | 464 ++++++++++++++++++++++++++++
- 3 files changed, 750 insertions(+), 261 deletions(-)
+ docs/CONFIG_v4.2_CHANGES.md | 464 insertions (new file)
+ docs/INSTALLATION.md        | 430 insertions (new file)
+ setup.py                    |  57 +++--
+ 6 files changed, 1,500 insertions(+), 275 deletions(-)
 ```
 
 **Breakdown**:
 - `config.yaml`: 277 insertions, 260 deletions (complete rewrite)
 - `docs/CONFIG_v4.2_CHANGES.md`: 464 insertions (new file)
+- `docs/INSTALLATION.md`: 430 insertions (new file)
+- `setup.py`: 43 insertions, 14 deletions (v4.2 upgrade)
+- `PR_DESCRIPTION.md`: 277 insertions (new file)
 - `README.md`: 5 insertions, 5 deletions (minor update)
 
 ## Checklist
@@ -215,6 +275,9 @@ The following v2.0 features are **not available** in v4.2:
 - [x] Breaking changes documented
 - [x] Commits are well-formatted
 - [x] Branch is up to date with base
+- [x] setup.py updated to v4.2
+- [x] Command-line tools implemented
+- [x] Installation guide complete
 
 ## Next Steps
 
@@ -222,22 +285,31 @@ After merging:
 
 ### For Developers
 
-1. **Update local config**
+1. **Update local environment**
    ```bash
    git pull origin main
-   cp config.yaml.backup config.yaml.v2.0.backup  # if needed
+   pip install -e .  # Reinstall with new setup.py
    ```
 
-2. **Review new configuration**
+2. **Verify command-line tools**
+   ```bash
+   nextims-train --help
+   nextims-evaluate --help
+   nextims-predict --help
+   nextims-predict-batch --help
+   ```
+
+3. **Review new configuration**
    - Read `docs/CONFIG_v4.2_CHANGES.md`
+   - Read `docs/INSTALLATION.md`
    - Understand new structure
    - Note removed features
 
 ### For Training
 
-3. **Start Phase 2 training**
+4. **Start Phase 2 training**
    ```bash
-   python scripts/train_gnn_minimal.py \
+   nextims-train \
        --nist-msp data/NIST17.MSP \
        --bde-cache data/processed/bde_cache/nist17_bde_cache.h5 \
        --output models/qcgn2oei_minimal_best.pth \
@@ -245,15 +317,15 @@ After merging:
        --batch-size 32
    ```
 
-4. **Evaluate with new metrics**
+5. **Evaluate with new metrics**
    ```bash
-   python scripts/evaluate_minimal.py \
+   nextims-evaluate \
        --model models/qcgn2oei_minimal_best.pth \
        --nist-msp data/NIST17.MSP \
        --visualize --benchmark
    ```
 
-5. **Check performance targets**
+6. **Check performance targets**
    - Cosine Similarity ≥ 0.85 = EXCELLENT
    - Cosine Similarity 0.80-0.85 = GOOD
    - Cosine Similarity 0.75-0.80 = MODERATE
@@ -263,6 +335,7 @@ After merging:
 
 - **Specification**: `docs/spec_v4.2_minimal_iterative.md` - Technical specification
 - **Changes Guide**: `docs/CONFIG_v4.2_CHANGES.md` - This PR's main documentation
+- **Installation**: `docs/INSTALLATION.md` - Comprehensive installation guide
 - **Quickstart**: `QUICKSTART.md` - 5-minute getting started guide
 - **README**: `README.md` - Project overview
 - **Data Structure**: `docs/NIST17_DATA_STRUCTURE.md` - NIST17 setup guide
@@ -272,6 +345,8 @@ After merging:
 
 If you have questions about:
 - **Migration**: See `docs/CONFIG_v4.2_CHANGES.md` FAQ section
+- **Installation**: See `docs/INSTALLATION.md` troubleshooting section
 - **Configuration**: See inline comments in `config.yaml`
 - **Design choices**: See `meta` section in `config.yaml`
 - **Performance targets**: See `evaluation.performance_targets` in `config.yaml`
+- **Command-line tools**: See `docs/INSTALLATION.md` command-line tools section
