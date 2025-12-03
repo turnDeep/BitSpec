@@ -6,14 +6,6 @@
 
 ## ✨ 特徴
 
-### v4.2での主要変更点
-
-- **最小構成アプローチ**: 16次元ノード特徴、3次元エッジ特徴（QC-GN2oMS2準拠）
-- **シンプルなアーキテクチャ**: QCGN2oEI_Minimal（10層GATv2Conv + Residual）
-- **実証主義**: 性能評価 → 必要に応じて段階的拡張
-- **高速学習**: v4.1比17%高速化（パラメータ数90%削減）
-- **BDE統合**: BonDNet（BDE-db2再学習版）によるエッジ特徴量
-
 ### コア機能
 
 - **GNN Architecture**: 10層GATv2Conv、8 attention heads、256 hidden dimension
