@@ -32,12 +32,22 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def parse_msp_file(msp_path: str) -> List[Dict]:
+def parse_msp_file(msp_path: str, mol_files_dir: Optional[str] = None) -> List[Dict]:
     """
     Parse NIST MSP format file
 
+    Args:
+        msp_path: Path to MSP file
+        mol_files_dir: Optional directory containing MOL files (e.g., "data/mol_files")
+                       If provided, will load chemical structures from MOL files using ID linkage
+                       when SMILES is not available in MSP
+
     Returns:
-        entries: List of {name, smiles, mw, formula, spectrum}
+        entries: List of {name, smiles, mw, formula, spectrum, id}
+
+    Note:
+        NIST17.MSP contains only mass spectra data. Chemical structures are stored
+        separately in mol_files/ directory and linked via ID numbers.
     """
     entries = []
     current_entry = {}
@@ -95,6 +105,35 @@ def parse_msp_file(msp_path: str) -> List[Dict]:
 
     if current_entry:
         entries.append(current_entry)
+
+    # Load chemical structures from MOL files if directory provided
+    if mol_files_dir is not None:
+        mol_dir = Path(mol_files_dir)
+        if mol_dir.exists():
+            logger.info(f"Loading chemical structures from MOL files: {mol_dir}")
+            loaded_count = 0
+
+            for entry in entries:
+                # Skip if SMILES already present
+                if 'smiles' in entry and entry['smiles']:
+                    continue
+
+                # Try to load from MOL file using ID
+                if 'id' in entry:
+                    mol_file = mol_dir / f"ID{entry['id']}.MOL"
+                    if mol_file.exists():
+                        try:
+                            mol = Chem.MolFromMolFile(str(mol_file), sanitize=True, removeHs=False)
+                            if mol is not None:
+                                entry['smiles'] = Chem.MolToSmiles(mol)
+                                loaded_count += 1
+                        except Exception as e:
+                            logger.debug(f"Failed to load MOL file {mol_file}: {e}")
+                            continue
+
+            logger.info(f"Loaded {loaded_count:,} chemical structures from MOL files")
+        else:
+            logger.warning(f"MOL files directory not found: {mol_dir}")
 
     return entries
 

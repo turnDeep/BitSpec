@@ -81,9 +81,10 @@ class NISTGraphDataset(Dataset):
             default_bde=85.0
         )
 
-        # Parse MSP file
+        # Parse MSP file and load chemical structures from MOL files
         logger.info(f"Loading NIST data from {msp_path}")
-        entries = parse_msp_file(msp_path)
+        mol_files_dir = "data/mol_files"
+        entries = parse_msp_file(msp_path, mol_files_dir=mol_files_dir)
 
         if max_samples > 0:
             entries = entries[:max_samples]

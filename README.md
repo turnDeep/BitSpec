@@ -67,7 +67,10 @@ cd NExtIMS
 pip install -r requirements.txt
 
 # 3. データのダウンロード（NIST17）
-# NIST EI-MSスペクトルデータベースを data/NIST17.MSP に配置
+# NIST EI-MSスペクトルデータベースを配置
+# - NIST17.MSP: マススペクトルデータ（ピーク情報）を data/ に配置
+# - mol_files/: 化学構造データ（MOLファイル）を data/mol_files/ に配置
+# - ID番号でリンク: MSP内のIDとMOLファイル名（ID12345.MOL）が対応
 
 # 4. BDE-db2環境構築（Phase 0）
 python scripts/download_bde_db2.py --output data/external/bde-db2

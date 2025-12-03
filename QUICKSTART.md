@@ -29,15 +29,24 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 ### ステップ2: データ準備
 
 ```bash
-# NIST17 MSPファイルを配置（ライセンス取得が必要）
+# NIST17データセットを配置（ライセンス取得が必要）
 # https://www.nist.gov/srd/nist-standard-reference-database-1a
+
+# データ構造:
+# - NIST17.MSP: マススペクトルデータ（ピーク情報のみ）
+# - mol_files/: 化学構造データ（MOLファイル）
+# - ID番号でリンク: MSP内のIDとMOLファイル名（ID12345.MOL）が対応
 
 # ファイルを配置
 mkdir -p data
+mkdir -p data/mol_files
 cp /path/to/mainlib data/NIST17.MSP
+cp -r /path/to/mol_files/* data/mol_files/
 
 # 確認
 ls -lh data/NIST17.MSP
+ls data/mol_files/ | head -10
+echo "Total MOL files: $(ls data/mol_files/*.MOL | wc -l)"
 ```
 
 ### ステップ3: BDE環境構築（Phase 0）
