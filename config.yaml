@@ -1,301 +1,318 @@
 # config.yaml
-# NExtIMS システム設定ファイル
-# Teacher-Student Knowledge Distillation with MoE Architecture
+# NExtIMS v4.2 - Minimal Configuration
+# 設計哲学: "Start Simple, Iterate Based on Evidence"
 
 # プロジェクト設定
 project:
   name: "NExtIMS"
-  description: "Neural EI-MS Prediction with Knowledge Distillation and MoE"
-  version: "2.0.0"
+  description: "Neural EI-MS Prediction - Minimal Configuration"
+  version: "4.2.0"
 
 # データ設定
 data:
   # NIST EI-MS データ
+  # NIST17.MSP: マススペクトルデータ（ピーク情報のみ）
+  # mol_files/: 化学構造データ（MOLファイル）
+  # ID番号でリンク: MSP内のIDとMOLファイル名（ID12345.MOL）が対応
   nist_msp_path: "data/NIST17.MSP"
   mol_files_dir: "data/mol_files"
 
-  # BDE-db2データ（BonDNet再学習用）
-  bde_db2_path: "data/external/bde-db2"
-  bondnet_training_data: "data/processed/bondnet_training"
+  # BDEキャッシュ（Phase 1で生成）
+  bde_cache: "data/processed/bde_cache/nist17_bde_cache.h5"
 
-  # 補助データ（オプション）
-  massbank_path: "data/massbank"  # Optional
-  gnps_path: "data/gnps"          # Optional
-
-  # 処理済みデータ
+  # 処理済みデータ（オプション、オンザフライ生成も可能）
   output_dir: "data/processed"
+  train_data: "data/processed/nist17_train.pt"
+  val_data: "data/processed/nist17_val.pt"
+  test_data: "data/processed/nist17_test.pt"
 
   # データ分割
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
 
-  # スペクトル設定
-  max_mz: 500          # NEIMS v2.0: m/z 0-500
+  # スペクトル設定（v4.2: m/z 1-1000）
+  min_mz: 1
+  max_mz: 1000
   mz_bin_size: 1.0
   min_intensity: 0.001
 
-  # メモリ効率モード（32GB RAM最適化）
-  # NIST17全データ（30万化合物）を32GB RAMでトレーニング可能にする
-  memory_efficient_mode:
-    enabled: true                              # メモリ効率モードを有効化
-    use_lazy_loading: true                     # 遅延読み込みを使用
-    lazy_cache_dir: "data/processed/lazy_cache"  # HDF5キャッシュディレクトリ
-    precompute_graphs: false                   # グラフを事前計算しない（メモリ節約）
-                                               # false: オンザフライ生成（メモリ効率優先）
-                                               # true: 事前計算（速度優先、大量メモリ必要）
+  # フィルタリング設定（Minimal Configuration）
+  supported_elements:
+    - H
+    - C
+    - N
+    - O
+    - F
+    - P
+    - S
+    - Cl
+    - Br
+    - I
 
-    # 32GB RAM環境用の推奨設定
-    ram_32gb_mode:
-      max_training_samples: null               # 全データ使用可能（nullで制限なし）
-      gradient_accumulation: 2                 # グラデーション累積（実効バッチサイズ=64）
-      empty_cache_frequency: 50                # 50イテレーションごとにキャッシュクリア
+  max_atoms: 200        # 最大原子数
+  min_atoms: 5          # 最小原子数
+  max_molecular_weight: 1000  # 最大分子量
 
-    # メモリ使用量推定（300k化合物の場合）
-    # Lazy Loading:
-    #   - Dataset: ~150 MB（メタデータのみ）
-    #   - HDF5 Cache: ~250 MB（ディスク、圧縮）
-    #   - Model: ~2 GB（Teacher）
-    #   - Training: ~3 GB（オーバーヘッド）
-    #   - Total: ~5.1 GB（vs 従来の17-26 GB）→ 70-100x削減
-    #
-    # Performance Trade-off:
-    #   - Training Speed: ~13%低下（グラフ生成オーバーヘッド）
-    #   - Memory Savings: 70-100x削減
-    #   - 結論: 許容可能なトレードオフ
-  
-# モデル設定
+# モデル設定（QC-GN2oEI Minimal）
 model:
-  # Teacher Model（GNN + ECFP Hybrid）
-  teacher:
-    type: "GNN_ECFP_Hybrid"
+  # 最小特徴量構成（QC-GN2oMS2インスパイア）
+  node_dim: 16          # Node features: 16 dims
+  edge_dim: 3           # Edge features: 3 dims (BDE + bond order + in ring)
 
-    # GNN Branch
-    gnn:
-      conv_type: "GINEConv"      # GINEConv for edge features
-      num_layers: 8              # Deep GNN
-      hidden_dim: 256
-      edge_dim: 128
-      dropout: 0.3               # MC Dropout用
-      drop_edge: 0.2             # DropEdge for over-smoothing
-      use_pair_norm: true        # PairNorm
-      use_bond_breaking: true    # Bond-Breaking Attention
-      use_bde_aware_prediction: true  # Use BDE to improve spectrum prediction (NEW in v2.1)
-                                      # When enabled, bond-breaking probabilities and BDE predictions
-                                      # are used to create fragmentation-aware embeddings during
-                                      # spectrum prediction, improving accuracy (inspired by QC-GN2oMS2)
+  # アーキテクチャ
+  hidden_dim: 256       # Hidden dimension (v4.1: 128 → v4.2: 256, better capacity)
+  num_layers: 10        # GATv2Conv layers (deeper for EI-MS complexity)
+  num_heads: 8          # Attention heads
 
-    # ECFP Branch
-    ecfp:
-      fingerprint_size: 4096     # ECFP4
-      mlp_hidden: 1024
-      mlp_output: 512
-      dropout: 0.3
+  # 出力設定
+  output_dim: 1000      # m/z 1-1000 (1000 bins)
 
-    # Fusion
-    fusion_dim: 1280             # Base: GNN(768) + ECFP(512) = 1280
-                                 # With BDE-aware: GNN(768) + FragAware(256) + ECFP(512) = 1536 (auto-adjusted)
+  # 正則化
+  dropout: 0.1          # Dropout rate
 
-    # Prediction Head
-    prediction:
-      hidden_dims: [1024, 512]
-      output_dim: 501            # m/z 0-500
-      use_bidirectional: true    # NEIMS-style bidirectional
+  # アーキテクチャ詳細
+  architecture:
+    conv_type: "GATv2Conv"  # Graph Attention Network v2
+    pooling: "global_mean_pool"
+    activation: "elu"
+    use_batch_norm: true
+    use_residual: true
 
-    # MC Dropout
-    mc_dropout:
-      n_samples: 30              # Uncertainty estimation
-      dropout_rate: 0.3
-
-  # Student Model（MoE-Residual MLP）
-  student:
-    type: "MoE_Residual"
-
-    # Input
-    input_dim: 6144              # ECFP4(4096) + Count FP(2048)
-
-    # Gate Network
-    gate:
-      hidden_dims: [512, 128]
-      num_experts: 4
-      top_k: 2                   # Top-2 routing
-
-    # Expert Networks
-    experts:
-      num_experts: 4
-      residual_blocks_per_expert: 6
-      hidden_dim: 6144
-      activation: "gelu"
-      use_layer_norm: true
-
-    # Prediction Head
-    prediction:
-      hidden_dims: [2048, 1024]
-      output_dim: 501            # m/z 0-500
-      dropout: 0.2
-      use_bidirectional: true
-
-  # 共通設定
-  common:
-    spectrum_dim: 501            # m/z 0-500
-    node_features: 48            # Atom features
-    edge_features: 6             # Bond features
-    
-# 訓練設定
+# 訓練設定（Phase 2）
 training:
-  # Phase 1: Teacherマルチタスク学習（NIST17のみ - 直接学習）
-  # PCQM4Mv2事前学習を削除し、NIST17で直接学習（アプローチB）
-  teacher_multitask:
-    dataset: "NIST_EIMS"
-    batch_size: 32               # MC Dropout用に小さめ
-    num_epochs: 100
-    num_workers: 8
-    prefetch_factor: 4
-    learning_rate: 1.0e-4
-    weight_decay: 1.0e-5
-    optimizer: "AdamW"
-    scheduler: "CosineAnnealingWarmRestarts"
-    scheduler_t0: 10
-    scheduler_tmult: 2
-    gradient_clip: 1.0
-    use_amp: true
-    mc_dropout_samples: 30       # Uncertainty estimation
-    checkpoint_dir: "checkpoints/teacher"
-    save_interval: 5
+  # エポック数
+  num_epochs: 300       # 最大エポック数
+  early_stopping_patience: 50  # Early stopping patience
 
-    # Multitask Learning Configuration
-    multitask:
-      use_bde_auxiliary: true    # BDE補助タスクを有効化
-      bde_cache_path: "data/processed/bde_cache/nist17_bde_cache.h5"
-      lambda_spectrum: 1.0       # スペクトル予測損失の重み（主タスク）
-      lambda_bde: 0.1            # BDE回帰損失の重み（補助タスク）
-      use_peak_loss: false       # Peak-focused loss（オプション）
-      peak_threshold: 0.05       # Peak detection threshold
+  # バッチサイズ（RTX 5070 Ti 16GB最適化）
+  batch_size: 32        # Training batch size
+  eval_batch_size: 64   # Evaluation batch size (larger for inference)
 
-  # Phase 2: Student知識蒸留
-  student_distill:
-    dataset: "NIST_EIMS"
-    batch_size: 32
-    num_epochs: 150
-    num_workers: 8
-    prefetch_factor: 4
-    learning_rate: 1.5e-4        # 初期学習率（安定化のため削減）
-    weight_decay: 1.0e-4
-    optimizer: "AdamW"
-    scheduler: "CosineAnnealingWarmRestarts"  # OneCycleLRから変更（安定性向上）
-    T_0: 30                      # 最初のサイクル長（30エポック）
-    T_mult: 2                    # 次のサイクルは2倍長く（30→60→120）
-    eta_min: 1.0e-6              # 最小学習率
-    gradient_clip: 0.3           # 勾配クリッピングを強化（0.5 → 0.3）
-    use_amp: false               # Mixed Precisionを無効化（NaN対策）
-    checkpoint_dir: "checkpoints/student"
-    save_interval: 5
-    teacher_checkpoint: "checkpoints/teacher/finetuned_teacher.pt"
+  # 最適化
+  optimizer: "RAdam"    # Rectified Adam (QC-GN2oMS2と同じ)
+  learning_rate: 0.001  # Initial learning rate (1e-3)
+  weight_decay: 0.00001 # Weight decay (1e-5)
 
-    # Knowledge Distillation
-    distillation:
-      # Temperature Annealing
-      temperature_init: 4.0
-      temperature_min: 1.0
-      temperature_schedule: "cosine"
+  # 学習率スケジューラ
+  scheduler: "CosineAnnealingLR"
+  scheduler_T_max: 300  # num_epochs
+  scheduler_eta_min: 0.000001  # 1e-6
 
-      # Loss Weights（GradNorm用初期値）
-      alpha_init: 0.3            # Hard label loss
-      beta_init: 0.5             # Soft label loss
-      gamma_init: 0.05           # Feature distillation (reduced for stability)
-      delta_load: 0.01           # Load balancing
-      delta_entropy: 0.001       # Entropy regularization
+  # 損失関数
+  loss_function: "cosine_similarity"  # QC-GN2oMS2と同じ
 
-      # GradNorm
-      use_gradnorm: true
-      warmup_epochs: 15          # GradNorm開始エポック
-      gradient_clip_range: [0.5, 2.0]
+  # グラデーション
+  gradient_clip: 1.0    # Gradient clipping
 
-      # Label Distribution Smoothing
-      use_lds: true
-      lds_sigma: 1.5             # m/z units
+  # データローダー
+  num_workers: 4        # DataLoader workers
+  pin_memory: true      # Pin memory for CUDA
+  prefetch_factor: 2    # Prefetch batches
 
-  # 共通設定
-  common:
-    use_wandb: false
-    wandb_project: "neims-v2"
-    log_interval: 10
-    val_interval: 1
-    early_stopping:
-      patience: 20
-      min_delta: 0.0001
-    
+  # チェックポイント
+  checkpoint_dir: "checkpoints/qcgn2oei_minimal"
+  save_interval: 10     # Save every N epochs
+  save_best_only: true  # Save only best model
+
+  # ロギング
+  log_interval: 10      # Log every N batches
+  val_interval: 1       # Validate every N epochs
+
 # GPU設定（RTX 5070 Ti 16GB最適化）
 gpu:
   use_cuda: true
+  device: "cuda:0"
   device_ids: [0]
-  mixed_precision: true          # FP16混合精度訓練
-  compile: false                 # PyTorch Geometric との相性問題のため無効化
-  compile_mode: "default"
 
   # メモリ最適化
-  memory_optimization:
-    gradient_accumulation_steps: 1  # 必要に応じて2-4に増やす
-    empty_cache_interval: 100       # N iterationごとにキャッシュクリア
-    pin_memory: true                # CUDA転送高速化
+  mixed_precision: false     # FP16 mixed precision（安定性のため無効化）
+  empty_cache_interval: 100  # Clear cache every N iterations
 
-  # RTX 50シリーズ固有の設定
-  rtx50:
-    enable_compat: true
-    force_sm90_emulation: false
+  # PyTorch Compile（PyG互換性のため無効化）
+  compile: false
+  compile_mode: "default"
 
 # CPU設定（Ryzen 7700最適化）
 cpu:
-  num_cores: 8                   # 物理コア数
-  num_threads: 16                # スレッド数
-  memory_limit_gb: 32            # RAM制限
+  num_cores: 8          # Physical cores
+  num_threads: 16       # Logical threads
+  memory_limit_gb: 32   # RAM limit
 
-# ロギング設定
-logging:
-  use_tensorboard: true
-  use_wandb: false
-  log_dir: "logs/neims_v2"
-  wandb_project: "neims-v2"
-  log_every: 10
-
-# 評価設定
+# 評価設定（Phase 3）
 evaluation:
   # 主要メトリクス
   metrics:
-    - "recall_at_k"              # 主要指標
-    - "spectral_similarity"      # Cosine similarity
-    - "mse"
-    - "mae"
-    - "rmse"
+    - cosine_similarity  # 主要指標（QC-GN2oMS2と同じ）
+    - top_k_recall       # Top-K Recall
+    - mse                # Mean Squared Error
+    - mae                # Mean Absolute Error
+    - rmse               # Root Mean Squared Error
+    - spectral_angle     # Spectral Angle (SAM)
+    - manhattan          # Manhattan Distance
 
-  # Recall@K設定
-  recall_k_values: [5, 10, 20]
-  recall_target: 0.955           # 目標: Recall@10 ≥ 95.5%
+  # Top-K Recall設定
+  recall_k_values: [5, 10, 20, 50]
 
-  # 効率性メトリクス
-  measure_inference_time: true
-  measure_memory_usage: true
+  # 性能目標（判定基準）
+  performance_targets:
+    cosine_similarity:
+      excellent: 0.85    # ≥ 0.85 = EXCELLENT（採用完了）
+      good: 0.80         # 0.80-0.85 = GOOD（要検討）
+      moderate: 0.75     # 0.75-0.80 = MODERATE（要改善検討）
+      insufficient: 0.75 # < 0.75 = INSUFFICIENT（改善必須）
 
-  # NEIMS v2.0専門メトリクス
-  neims_v2_metrics:
-    expert_usage: true           # Expert使用分布
-    mc_dropout_uncertainty: true # MC Dropout不確実性
-    kd_efficiency: true          # KD転移効率
+    top_10_recall:
+      excellent: 0.85
+      good: 0.80
+      moderate: 0.75
+      insufficient: 0.75
 
-# データ拡張
-augmentation:
-  # Label Distribution Smoothing
-  lds:
+  # ベンチマーク設定
+  benchmark:
+    measure_inference_time: true
+    measure_memory_usage: true
+    compare_with_baseline: false  # v4.1比較（オプション）
+
+  # 可視化
+  visualization:
+    plot_predictions: true
+    num_examples: 10
+    save_figures: true
+    output_dir: "results/evaluation/figures"
+
+  # 出力設定
+  output_dir: "results/evaluation"
+  save_predictions: true
+  save_metrics: true
+
+# 推論設定（Phase 5）
+inference:
+  # シングル予測設定
+  single:
+    model_path: "models/qcgn2oei_minimal_best.pth"
+    device: "cuda"
+    batch_size: 1
+
+  # バッチ予測設定
+  batch:
+    model_path: "models/qcgn2oei_minimal_best.pth"
+    device: "cuda"
+    batch_size: 64      # Larger batch for inference
+    num_workers: 4
+
+  # 出力設定
+  output:
+    format: "csv"       # csv, json, npy
+    include_metadata: true
+    extract_top_k_peaks: 10  # Extract top-K peaks
+    visualization: true      # Generate spectrum plots
+
+# ロギング設定
+logging:
+  level: "INFO"         # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # ファイルロギング
+  log_to_file: true
+  log_dir: "logs"
+  log_file: "nextims_v4.2.log"
+
+  # TensorBoard
+  use_tensorboard: false
+  tensorboard_dir: "runs"
+
+  # Weights & Biases（オプション）
+  use_wandb: false
+  wandb_project: "nextims-v4.2"
+  wandb_entity: null
+
+# BDE設定（Phase 0 & Phase 1）
+bde:
+  # BonDNet設定
+  bondnet:
+    model_path: "models/bondnet_bde_db2_best.pth"
+    use_pretrained: false  # Use custom trained model
+
+  # BDEキャッシュ設定
+  cache:
     enabled: true
-    sigma: 1.5                   # m/z units
+    cache_dir: "data/processed/bde_cache"
+    cache_file: "nist17_bde_cache.h5"
+    compression: "gzip"
 
-  # Isotope Substitution
-  isotope:
-    enabled: true
-    probability: 0.05            # 5%の分子に適用
-    max_substitutions: 2         # 最大置換数
+  # BDE計算設定
+  calculation:
+    use_calculator: false   # Use cache only for speed
+    default_bde: 85.0       # Default BDE value (kcal/mol) when not available
+    normalize: true         # Normalize BDE to [0, 1]
+    bde_min: 0.0
+    bde_max: 200.0
 
-  # Conformer Generation（Teacher事前学習のみ）
-  conformer:
-    enabled: true                # Pretrain onlyで有効化
-    num_conformers: 5            # 3-5コンフォーマー
+# 実験設定
+experiment:
+  # 実験追跡
+  name: "qcgn2oei_minimal_v4.2"
+  description: "QC-GN2oEI Minimal Configuration - Start Simple, Iterate Based on Evidence"
+
+  # 再現性
+  random_seed: 42
+  deterministic: true   # Ensure reproducibility
+
+  # デバッグ
+  debug_mode: false
+  fast_dev_run: false   # Quick test run
+  limit_train_batches: null  # Limit batches for testing
+  limit_val_batches: null
+
+# パフォーマンス設定
+performance:
+  # メモリ効率モード（大規模データセット用）
+  memory_efficient_mode: false  # 標準モードで十分（v4.2は軽量）
+
+  # プロファイリング
+  enable_profiling: false
+  profile_memory: false
+  profile_time: false
+
+# システム情報（参考）
+system:
+  # ハードウェア構成
+  gpu_model: "RTX 5070 Ti"
+  gpu_memory_gb: 16
+  cpu_model: "Ryzen 7700"
+  ram_gb: 32
+
+  # 推奨設定
+  recommended:
+    batch_size_training: 32
+    batch_size_inference: 64
+    num_workers: 4
+    gradient_accumulation_steps: 1  # Adjust if OOM
+
+# メタ情報
+meta:
+  created_date: "2025-12-03"
+  last_modified: "2025-12-03"
+  spec_version: "v4.2"
+  config_version: "1.0.0"
+
+  # 設計哲学
+  design_philosophy: "Start Simple, Iterate Based on Evidence"
+
+  # 主要変更点（v4.1 → v4.2）
+  changes:
+    - "Node features: 128 → 16 (87.5% reduction)"
+    - "Edge features: 64 → 3 (95.3% reduction)"
+    - "Hidden dim: 128 → 256 (better capacity for EI-MS)"
+    - "Spectrum range: m/z 0-500 → 1-1000 (broader coverage)"
+    - "Training time: ~48h → ~40h (17% faster)"
+    - "Memory footprint: Reduced by 90% in encoder"
+
+  # ドキュメント
+  documentation:
+    specification: "docs/spec_v4.2_minimal_iterative.md"
+    quickstart: "QUICKSTART.md"
+    readme: "README.md"
+    data_structure: "docs/NIST17_DATA_STRUCTURE.md"
+    prediction_guide: "docs/PREDICTION_GUIDE.md"
