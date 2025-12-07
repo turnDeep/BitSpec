@@ -19,12 +19,16 @@ torch-geometric>=2.5.0
 ogb>=1.3.6
 
 # DGL (Deep Graph Library) - BonDNetの依存関係
-# CUDA版は別途インストールが必要: pip install dgl -f https://data.dgl.ai/wheels/torch-2.5/cu128/repo.html
-dgl
+# Note: CUDA版は別途インストールが必要（requirements.txtには含めない）
+# インストール手順:
+#   pip install dgl -f https://data.dgl.ai/wheels/torch-2.5/cu128/repo.html
+# Docker環境では自動的にCUDA版がインストールされます
 
 # BonDNet - BDE (Bond Dissociation Energy) 計算
-# GitHubから直接インストール
-git+https://github.com/mjwen/bondnet.git
+# Note: DGLが先にインストールされている必要があります
+# インストール手順:
+#   pip install git+https://github.com/mjwen/bondnet.git
+# Docker環境では自動的にインストールされます
 
 # データ処理
 numpy>=1.24.0
