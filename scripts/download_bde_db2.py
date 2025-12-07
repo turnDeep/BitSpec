@@ -56,7 +56,7 @@ def download_file(url, output_path, description="Downloading"):
 
 
 def clone_github_repo(output_dir):
-    """Clone BDE-db2 GitHub repository"""
+    """Clone BDE-db2 GitHub repository with Git LFS support"""
     repo_url = "https://github.com/patonlab/BDE-db2.git"
     repo_dir = output_dir / "BDE-db2-repo"
 
@@ -68,6 +68,27 @@ def clone_github_repo(output_dir):
         logger.info(f"Cloning BDE-db2 repository from {repo_url}")
         subprocess.run(["git", "clone", repo_url, str(repo_dir)], check=True)
         logger.info(f"Repository cloned: {repo_dir}")
+
+    # Pull Git LFS files if LFS is used
+    logger.info("Checking for Git LFS files...")
+    try:
+        # Check if git-lfs is installed
+        result = subprocess.run(
+            ["git", "lfs", "version"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            logger.info("Git LFS detected, pulling large files...")
+            subprocess.run(["git", "lfs", "pull"], cwd=repo_dir, check=True)
+            logger.info("Git LFS files downloaded")
+        else:
+            logger.warning("Git LFS not installed, skipping LFS pull")
+    except FileNotFoundError:
+        logger.warning("Git LFS not available, large files may not be downloaded")
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Git LFS pull failed: {e}")
 
     return repo_dir
 
