@@ -131,9 +131,13 @@ RUN pip install --no-cache-dir ogb>=1.3.6
 # DGL (Deep Graph Library) インストール
 # BonDNetの依存関係として必要
 # ===================================================
-# CUDA 12.8対応のDGLをインストール
-RUN pip install --no-cache-dir \
-    dgl -f https://data.dgl.ai/wheels/torch-2.5/cu128/repo.html
+# PyTorch Nightlyと互換性を持たせるため、ソースからビルド
+# sm_120 (RTX 5070 Ti) 対応のため、CUDA環境変数を設定
+RUN export FORCE_CUDA=1 && \
+    export TORCH_CUDA_ARCH_LIST="9.0;12.0" && \
+    export CUDA_HOME=/usr/local/cuda-12.8 && \
+    echo "Building DGL from source with CUDA support..." && \
+    pip install --no-cache-dir git+https://github.com/dmlc/dgl.git
 
 # ===================================================
 # BonDNet インストール
