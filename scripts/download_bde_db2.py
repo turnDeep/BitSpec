@@ -72,12 +72,8 @@ def clone_github_repo(output_dir):
     return repo_dir
 
 
-def download_figshare_dataset(output_dir):
-    """Download BDE-db2 dataset from Figshare"""
-    # Figshare direct download URL
-    # Note: This URL may need to be updated if the dataset is moved
-    figshare_url = "https://figshare.com/ndownloader/files/34266542"
-
+def download_figshare_dataset(output_dir, repo_dir=None):
+    """Download BDE-db2 dataset from GitHub repository or Figshare"""
     output_file = output_dir / "bde-db2.csv.gz"
 
     if output_file.exists():
@@ -86,8 +82,24 @@ def download_figshare_dataset(output_dir):
         logger.info(f"File size: {file_size_mb:.2f} MB")
         return output_file
 
-    logger.info("Downloading BDE-db2 dataset from Figshare...")
-    logger.info("This may take several minutes (dataset is ~100-200 MB)")
+    # Try to copy from cloned GitHub repository first (preferred method)
+    if repo_dir and repo_dir.exists():
+        repo_dataset = repo_dir / "Datasets" / "bde-db2" / "bde-db2.csv.gz"
+        if repo_dataset.exists():
+            logger.info(f"Copying dataset from GitHub repository: {repo_dataset}")
+            shutil.copy2(repo_dataset, output_file)
+            file_size_mb = output_file.stat().st_size / (1024 * 1024)
+            logger.info(f"Copied: {output_file} ({file_size_mb:.2f} MB)")
+            return output_file
+        else:
+            logger.warning(f"Dataset not found in repository: {repo_dataset}")
+
+    # Fallback: Try Figshare download (may not work due to API changes)
+    logger.info("Dataset not found in repository, trying Figshare...")
+    logger.info("Note: Figshare direct download may not work. If it fails,")
+    logger.info("please ensure the GitHub repository was cloned successfully.")
+
+    figshare_url = "https://figshare.com/ndownloader/files/34266542"
 
     try:
         download_file(figshare_url, output_file, "Downloading bde-db2.csv.gz")
@@ -96,6 +108,8 @@ def download_figshare_dataset(output_dir):
         logger.info("Please manually download from:")
         logger.info("https://figshare.com/articles/dataset/bde-db2_csv_gz/19367051")
         logger.info(f"And place the file at: {output_file}")
+        logger.info("Or ensure the GitHub repository is cloned with:")
+        logger.info(f"  git clone https://github.com/patonlab/BDE-db2.git {repo_dir}")
         return None
 
     return output_file
@@ -260,8 +274,8 @@ def main():
             logger.warning(f"Failed to clone repository: {e}")
             logger.warning("Continuing with dataset download only...")
 
-    # Step 2: Download dataset from Figshare
-    compressed_file = download_figshare_dataset(output_dir)
+    # Step 2: Download dataset from GitHub repository or Figshare
+    compressed_file = download_figshare_dataset(output_dir, repo_dir)
 
     if not compressed_file:
         logger.error("Failed to download dataset")
