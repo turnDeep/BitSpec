@@ -58,6 +58,21 @@ cd NExtIMS
 # 2. 依存関係のインストール
 pip install -r requirements.txt
 
+# 2a. Git LFS（BDE-db2使用時のみ必要）
+# Ubuntu/Debian
+sudo apt-get install git-lfs
+git lfs install
+
+# macOS
+# brew install git-lfs
+# git lfs install
+
+# 2b. DGL & BonDNet（BDE計算に必要）
+# CUDA版DGL
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.5/cu128/repo.html
+# BonDNet
+pip install git+https://github.com/mjwen/bondnet.git
+
 # 3. データのダウンロード（NIST17）
 # NIST EI-MSスペクトルデータベースを配置
 # - NIST17.MSP: マススペクトルデータ（ピーク情報）を data/ に配置
