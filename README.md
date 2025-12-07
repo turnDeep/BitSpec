@@ -64,20 +64,41 @@ pip install -r requirements.txt
 # - mol_files/: 化学構造データ（MOLファイル）を data/mol_files/ に配置
 # - ID番号でリンク: MSP内のIDとMOLファイル名（ID12345.MOL）が対応
 
-# 4. BDE-db2環境構築（Phase 0）
+# 4. BonDNet BDEモデル準備（Phase 0）
+
+# Option A: 公式Pre-trained modelを使用（推奨、学習不要）
+# BonDNet公式の学習済みモデル (bdncm/20200808) を自動ダウンロード
+# NIST17カバレッジ: ~95%
+# ※ 以降のスクリプトで --bondnet-model 未指定時に自動使用
+
+# Option B: BDE-db2で再学習（より高カバレッジ、48-72時間必要）
+# より多くの元素（Cl, Br, Iなど）をサポート
 python scripts/download_bde_db2.py --output data/external/bde-db2
 python scripts/train_bondnet_bde_db2.py \
     --data-path data/external/bde-db2 \
     --output models/bondnet_bde_db2_best.pth
+# NIST17カバレッジ: ~99%+ (ハロゲン含有化合物対応)
 ```
 
 ### トレーニング（Phase 2）
 
 ```bash
 # GNN学習（約40時間、RTX 5070 Ti）
+
+# Option A使用時（公式Pre-trained model）
 python scripts/train_gnn_minimal.py \
     --nist-msp data/NIST17.MSP \
     --bde-cache data/processed/bde_cache/nist17_bde_cache.h5 \
+    --output models/qcgn2oei_minimal_best.pth \
+    --epochs 200 \
+    --batch-size 32
+# --bondnet-model 未指定でbdncm/20200808を自動使用
+
+# Option B使用時（再学習済みBonDNet）
+python scripts/train_gnn_minimal.py \
+    --nist-msp data/NIST17.MSP \
+    --bde-cache data/processed/bde_cache/nist17_bde_cache.h5 \
+    --bondnet-model models/bondnet_bde_db2_best.pth \
     --output models/qcgn2oei_minimal_best.pth \
     --epochs 200 \
     --batch-size 32
@@ -346,12 +367,25 @@ python tests/test_models.py
 
 ### 学習時間（RTX 5070 Ti 16GB）
 
+#### Option A: 公式Pre-trained BonDNet使用
+
 | フェーズ | 時間 | 説明 |
 |---------|------|------|
-| Phase 0 | 48-72時間 | BonDNet BDE-db2再学習 |
+| Phase 0 | **0時間** | BonDNet公式モデル (bdncm/20200808) 自動使用 |
 | Phase 1 | 2時間 | データ準備（NIST17, 280K spectra） |
 | Phase 2 | 40時間 | GNN学習（200 epochs, early stopping） |
 | Phase 3 | 2時間 | 評価・可視化 |
+| **合計** | **約2日** | すぐに始められる |
+
+#### Option B: BDE-db2で再学習
+
+| フェーズ | 時間 | 説明 |
+|---------|------|------|
+| Phase 0 | **48-72時間** | BonDNet BDE-db2再学習（より高カバレッジ） |
+| Phase 1 | 2時間 | データ準備（NIST17, 280K spectra） |
+| Phase 2 | 40時間 | GNN学習（200 epochs, early stopping） |
+| Phase 3 | 2時間 | 評価・可視化 |
+| **合計** | **約5-6日** | 上級者向け |
 
 ### 推論速度
 

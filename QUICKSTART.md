@@ -49,7 +49,25 @@ ls data/mol_files/ | head -10
 echo "Total MOL files: $(ls data/mol_files/*.MOL | wc -l)"
 ```
 
-### ステップ3: BDE環境構築（Phase 0）
+### ステップ3: BonDNet BDEモデル準備（Phase 0）
+
+**初心者・すぐ始めたい方は「Option A」を推奨します**
+
+#### Option A: 公式Pre-trained modelを使用（推奨）
+
+```bash
+# 何もする必要なし！
+# BonDNet公式の学習済みモデル (bdncm/20200808) が
+# 以降のスクリプトで自動ダウンロード・使用されます
+
+# NIST17カバレッジ: ~95%
+# 学習時間: 0時間（即座に開始可能）
+# 対応元素: C, H, O, N, F (5元素)
+```
+
+#### Option B: BDE-db2で再学習（上級者向け）
+
+**より高いカバレッジが必要な場合のみ**
 
 ```bash
 # BDE-db2データセットのダウンロード（約10GB）
@@ -68,9 +86,15 @@ python scripts/train_bondnet_bde_db2.py \
     --data-path data/external/bde-db2 \
     --model models/bondnet_bde_db2_best.pth \
     --evaluate-only
+
+# NIST17カバレッジ: ~99%+
+# 学習時間: 48-72時間
+# 対応元素: C, H, O, N, S, Cl, F, P, Br, I (10元素)
 ```
 
 ### ステップ4: GNN学習（Phase 2）
+
+#### Option A使用時（公式Pre-trained BonDNet）
 
 ```bash
 # データ準備とBDEキャッシュ生成（約2時間）
@@ -80,12 +104,39 @@ python scripts/train_gnn_minimal.py \
     --epochs 200 \
     --batch-size 32 \
     --create-cache
+# bdncm/20200808 が自動使用される
 
 # 学習開始（約40時間）
 # ※ バックグラウンド実行推奨
 nohup python scripts/train_gnn_minimal.py \
     --nist-msp data/NIST17.MSP \
     --bde-cache data/processed/bde_cache/nist17_bde_cache.h5 \
+    --output models/qcgn2oei_minimal_best.pth \
+    --epochs 200 \
+    --batch-size 32 \
+    > training.log 2>&1 &
+
+# 進捗確認
+tail -f training.log
+```
+
+#### Option B使用時（再学習済みBonDNet）
+
+```bash
+# データ準備とBDEキャッシュ生成（約2時間）
+python scripts/train_gnn_minimal.py \
+    --nist-msp data/NIST17.MSP \
+    --bondnet-model models/bondnet_bde_db2_best.pth \
+    --output models/qcgn2oei_minimal_best.pth \
+    --epochs 200 \
+    --batch-size 32 \
+    --create-cache
+
+# 学習開始（約40時間）
+nohup python scripts/train_gnn_minimal.py \
+    --nist-msp data/NIST17.MSP \
+    --bde-cache data/processed/bde_cache/nist17_bde_cache.h5 \
+    --bondnet-model models/bondnet_bde_db2_best.pth \
     --output models/qcgn2oei_minimal_best.pth \
     --epochs 200 \
     --batch-size 32 \
@@ -302,16 +353,31 @@ pytest tests/ -v
 
 ## ⏱️ 予想所要時間
 
+### Option A使用時（公式Pre-trained BonDNet）
+
 | タスク | 時間 | 備考 |
 |--------|------|------|
 | 環境セットアップ | 30分 | 初回のみ |
 | データ準備 | 15分 | NIST17入手含む |
-| Phase 0（BDE環境） | 48-72時間 | BonDNet学習 |
+| Phase 0（BDE環境） | **0時間** | Pre-trained使用 |
 | Phase 1（データ準備） | 2時間 | BDEキャッシュ生成 |
 | Phase 2（GNN学習） | 40時間 | Early stopping想定 |
 | Phase 3（評価） | 2時間 | 可視化含む |
 | Phase 5（推論） | 数秒-数分 | バッチサイズ依存 |
-| **合計** | **約5-6日** | 並列実行で短縮可能 |
+| **合計** | **約2日** | すぐに始められる！ |
+
+### Option B使用時（再学習BonDNet）
+
+| タスク | 時間 | 備考 |
+|--------|------|------|
+| 環境セットアップ | 30分 | 初回のみ |
+| データ準備 | 15分 | NIST17入手含む |
+| Phase 0（BDE環境） | **48-72時間** | BonDNet再学習 |
+| Phase 1（データ準備） | 2時間 | BDEキャッシュ生成 |
+| Phase 2（GNN学習） | 40時間 | Early stopping想定 |
+| Phase 3（評価） | 2時間 | 可視化含む |
+| Phase 5（推論） | 数秒-数分 | バッチサイズ依存 |
+| **合計** | **約5-6日** | より高カバレッジ |
 
 ## 💡 ヒント
 
