@@ -34,6 +34,8 @@ RUN apt-get update && \
     libssl-dev libffi-dev libxml2-dev libxslt1-dev zlib1g-dev \
     # 化学計算用依存関係
     libopenblas-dev liblapack-dev libhdf5-dev \
+    # Git LFS (BDE-db2ダウンロードに必要)
+    git-lfs \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js のインストール (Claude CLI に必要)
@@ -121,6 +123,24 @@ RUN export FORCE_CUDA=1 && \
 
 # Open Graph Benchmark (OGB) for PCQM4Mv2 dataset
 RUN pip install --no-cache-dir ogb>=1.3.6
+
+# ===================================================
+# DGL (Deep Graph Library) インストール
+# BonDNetの依存関係として必要
+# ===================================================
+# CUDA 12.8対応のDGLをインストール
+RUN pip install --no-cache-dir \
+    dgl -f https://data.dgl.ai/wheels/torch-2.5/cu128/repo.html
+
+# ===================================================
+# BonDNet インストール
+# BDE (Bond Dissociation Energy) 計算に使用
+# ===================================================
+RUN pip install --no-cache-dir \
+    git+https://github.com/mjwen/bondnet.git
+
+# Git LFS の初期化 (BDE-db2データセット用)
+RUN git lfs install
 
 # 追加の機械学習ツール
 RUN pip install --no-cache-dir \

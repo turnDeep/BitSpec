@@ -21,9 +21,20 @@ cd NExtIMS
 # 依存関係のインストール
 pip install -r requirements.txt
 
+# Git LFS（BDE-db2使用時のみ）
+sudo apt-get install git-lfs  # Ubuntu/Debian
+# brew install git-lfs  # macOS
+git lfs install
+
+# DGL & BonDNet（BDE計算に必要）
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.5/cu128/repo.html
+pip install git+https://github.com/mjwen/bondnet.git
+
 # 確認
 python -c "import torch; print(f'PyTorch: {torch.__version__}')"
 python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python -c "import dgl; print(f'DGL: {dgl.__version__}')"
+python -c "import bondnet; print('BonDNet: OK')"
 ```
 
 ### ステップ2: データ準備
