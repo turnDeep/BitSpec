@@ -70,25 +70,30 @@ echo "Total MOL files: $(ls data/mol_files/*.MOL | wc -l)"
 **より高いカバレッジが必要な場合のみ**
 
 ```bash
-# BDE-db2データセットのダウンロード（約10GB）
+# ステップ1: BDE-db2データセットのダウンロード（約200MB）
 python scripts/download_bde_db2.py \
     --output data/external/bde-db2
 
-# BonDNetの学習（48-72時間）
+# ステップ2: BonDNet形式に変換（1-2時間）
+python scripts/convert_bde_db2_to_bondnet.py \
+    --input data/external/bde-db2/bde-db2.csv \
+    --output data/processed/bondnet_training/
+
+# ステップ3: BonDNetの学習（48-72時間）
 python scripts/train_bondnet_bde_db2.py \
-    --data-path data/external/bde-db2 \
+    --data-dir data/processed/bondnet_training/ \
     --output models/bondnet_bde_db2_best.pth \
     --epochs 100 \
     --batch-size 256
 
-# 検証
+# ステップ4: 検証
 python scripts/train_bondnet_bde_db2.py \
-    --data-path data/external/bde-db2 \
+    --data-dir data/processed/bondnet_training/ \
     --model models/bondnet_bde_db2_best.pth \
     --evaluate-only
 
 # NIST17カバレッジ: ~99%+
-# 学習時間: 48-72時間
+# 学習時間: 合計50-74時間（変換1-2時間 + 学習48-72時間）
 # 対応元素: C, H, O, N, S, Cl, F, P, Br, I (10元素)
 ```
 

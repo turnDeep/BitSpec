@@ -73,10 +73,20 @@ pip install -r requirements.txt
 
 # Option B: BDE-db2で再学習（より高カバレッジ、48-72時間必要）
 # より多くの元素（Cl, Br, Iなど）をサポート
+
+# ステップ1: データセットダウンロード
 python scripts/download_bde_db2.py --output data/external/bde-db2
+
+# ステップ2: BonDNet形式に変換（1-2時間）
+python scripts/convert_bde_db2_to_bondnet.py \
+    --input data/external/bde-db2/bde-db2.csv \
+    --output data/processed/bondnet_training/
+
+# ステップ3: BonDNet学習（48-72時間）
 python scripts/train_bondnet_bde_db2.py \
-    --data-path data/external/bde-db2 \
+    --data-dir data/processed/bondnet_training/ \
     --output models/bondnet_bde_db2_best.pth
+
 # NIST17カバレッジ: ~99%+ (ハロゲン含有化合物対応)
 ```
 
