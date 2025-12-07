@@ -8,6 +8,10 @@ torch
 torchvision
 torchaudio
 
+# torchdata (BonDNet dependency)
+# Note: Version 0.7.1 is compatible with BonDNet
+torchdata==0.7.1
+
 # 化学構造処理
 rdkit>=2023.9.1
 mordred>=1.2.0

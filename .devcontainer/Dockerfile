@@ -74,6 +74,9 @@ RUN pip install --no-cache-dir --pre \
     torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/nightly/cu128
 
+# torchdata (BonDNet dependency) - Version 0.7.1 is compatible
+RUN pip install --no-cache-dir torchdata==0.7.1
+
 # ===================================================
 # Pythonパッケージ一括インストール
 # 依存関係の問題を回避するため、ビルドツールを先にインストール
