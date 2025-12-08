@@ -26,7 +26,7 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     # 基本ツール
-    git wget curl vim build-essential cmake gcc g++ \
+    git wget curl vim build-essential cmake gcc g++ ccache \
     ca-certificates gnupg lsb-release \
     # Python 3.11（PyTorch Nightlyと互換性が良い）
     python3.11 python3.11-dev python3.11-venv python3-pip \
@@ -117,12 +117,26 @@ RUN pip install --no-cache-dir torch-geometric
 # torch_scatterなど拡張ライブラリをソースからビルド
 # sm_120 (RTX 5070 Ti) 対応のため、CUDA環境変数を設定してソースからビルド
 # PyTorch Nightly (2.10.0+) はビルド済みホイールが存在しないため、直接ソースからビルド
+# メモリ効率化のため、ccache有効化とコンパイラフラグの最適化を実施
 RUN export FORCE_CUDA=1 && \
     export TORCH_CUDA_ARCH_LIST="9.0;12.0" && \
     export CUDA_HOME=/usr/local/cuda-12.8 && \
-    echo "Building PyG extensions from source with CUDA support..." && \
+    export MAX_JOBS=1 && \
+    export CC="ccache gcc" && \
+    export CXX="ccache g++" && \
+    export CFLAGS="-g0 -O2 -DNDEBUG" && \
+    export CXXFLAGS="-g0 -O2 -DNDEBUG" && \
+    export LDFLAGS="-Wl,--no-keep-memory,--reduce-memory-overheads" && \
+    echo "Building PyG extensions from source with CUDA support (memory-optimized)..." && \
     pip install --no-cache-dir --no-build-isolation torch-scatter && \
-    pip install --no-cache-dir --no-build-isolation torch-sparse torch-cluster torch-spline-conv
+    echo "Cleaning up temporary files..." && \
+    rm -rf /tmp/* /root/.cache/* && \
+    pip install --no-cache-dir --no-build-isolation torch-sparse && \
+    rm -rf /tmp/* /root/.cache/* && \
+    pip install --no-cache-dir --no-build-isolation torch-cluster && \
+    rm -rf /tmp/* /root/.cache/* && \
+    pip install --no-cache-dir --no-build-isolation torch-spline-conv && \
+    rm -rf /tmp/* /root/.cache/*
 
 # Open Graph Benchmark (OGB) for PCQM4Mv2 dataset
 RUN pip install --no-cache-dir ogb>=1.3.6
@@ -132,12 +146,68 @@ RUN pip install --no-cache-dir ogb>=1.3.6
 # BonDNetの依存関係として必要
 # ===================================================
 # PyTorch Nightlyと互換性を持たせるため、ソースからビルド
-# sm_120 (RTX 5070 Ti) 対応のため、CUDA環境変数を設定
+# sm_120 (RTX 5070 Ti) 対応のため、パッチを適用して手動ビルド
+# GraphBoltを無効化してメモリオーバーフロー問題を回避
 RUN export FORCE_CUDA=1 && \
     export TORCH_CUDA_ARCH_LIST="9.0;12.0" && \
     export CUDA_HOME=/usr/local/cuda-12.8 && \
-    echo "Building DGL from source with CUDA support..." && \
-    pip install --no-cache-dir git+https://github.com/dmlc/dgl.git
+    export MAX_JOBS=1 && \
+    export CC="ccache gcc" && \
+    export CXX="ccache g++" && \
+    export CFLAGS="-g0 -O2 -DNDEBUG" && \
+    export CXXFLAGS="-g0 -O2 -DNDEBUG" && \
+    export LDFLAGS="-Wl,--no-keep-memory,--reduce-memory-overheads" && \
+    echo "Building DGL from source with CUDA support (memory-optimized, GraphBolt disabled)..." && \
+    # 1. ソースコードを再帰的にクローン
+    git clone --recursive https://github.com/dmlc/dgl.git /tmp/dgl_source && \
+    cd /tmp/dgl_source && \
+    # 2. パッチ適用 (CUDA 12.8 & sm_120 サポート)
+    echo 'if (CUDA_VERSION VERSION_GREATER_EQUAL "12.8")' >> cmake/modules/CUDA.cmake && \
+    echo '  list(APPEND dgl_known_gpu_archs "120")' >> cmake/modules/CUDA.cmake && \
+    echo '  set(dgl_cuda_arch_ptx "120")' >> cmake/modules/CUDA.cmake && \
+    echo 'endif()' >> cmake/modules/CUDA.cmake && \
+    # 3. 【強制無効化】GraphBoltの除外 (メモリオーバーフロー対策)
+    # (A) CMakeLists.txt から add_subdirectory(graphbolt) を正規表現でコメントアウト
+    sed -i 's/add_subdirectory[[:space:]]*([[:space:]]*graphbolt[[:space:]]*)/# &/' CMakeLists.txt && \
+    # (B) 念には念を入れ、graphboltフォルダ内のビルド定義を空にする
+    echo "# GraphBolt disabled to avoid memory overflow during build" > graphbolt/CMakeLists.txt && \
+    # (C) 確認用にCMakeLists.txtの該当行を表示
+    echo "Verification: GraphBolt should be disabled in CMakeLists.txt" && \
+    grep -n "graphbolt" CMakeLists.txt || echo "GraphBolt references removed successfully" && \
+    # 4. ビルド前のクリーンアップ（メモリ確保）
+    rm -rf /tmp/* /root/.cache/* /opt/venv/lib/python*/site-packages/__pycache__ 2>/dev/null || true && \
+    sync && \
+    # 5. C++ライブラリのビルド（メモリ効率最優先）
+    mkdir -p build && cd build && \
+    cmake \
+        -DCMAKE_BUILD_TYPE=MinSizeRel \
+        -DUSE_CUDA=ON \
+        -DUSE_OPENMP=ON \
+        -DUSE_GRAPHBOLT=OFF \
+        -DCUDA_ARCH_NAME=Manual \
+        -DCUDA_ARCH_BIN="12.0" \
+        -DCMAKE_C_COMPILER=gcc \
+        -DCMAKE_CXX_COMPILER=g++ \
+        -DCMAKE_C_FLAGS="-g0 -O2 -DNDEBUG" \
+        -DCMAKE_CXX_FLAGS="-g0 -O2 -DNDEBUG" \
+        -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-keep-memory,--reduce-memory-overheads" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-keep-memory,--reduce-memory-overheads" \
+        .. && \
+    # 6. 並列数1で確実にビルド（メモリオーバーフロー回避）
+    echo "Starting DGL C++ library build with memory-optimized settings..." && \
+    make -j1 VERBOSE=1 && \
+    echo "DGL C++ library built successfully" && \
+    # 7. 中間ファイルのクリーンアップ
+    rm -rf /tmp/* /root/.cache/* 2>/dev/null || true && \
+    sync && \
+    # 8. Pythonバインディングのインストール
+    echo "Installing DGL Python bindings..." && \
+    cd ../python && \
+    python setup.py install && \
+    # 9. 最終クリーンアップ
+    cd / && \
+    rm -rf /tmp/dgl_source /tmp/* /root/.cache/* && \
+    echo "DGL installation completed successfully (GraphBolt disabled)"
 
 # ===================================================
 # BonDNet インストール
