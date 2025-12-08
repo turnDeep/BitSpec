@@ -7,6 +7,7 @@
 torch
 torchvision
 torchaudio
+torchdata>=0.7.0
 
 # 化学構造処理
 rdkit>=2023.9.1

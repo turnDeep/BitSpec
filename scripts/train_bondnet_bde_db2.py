@@ -239,8 +239,25 @@ def run_bondnet_training_alternative(
     logger.info("Using alternative training approach (BonDNet API)")
 
     try:
+        import torchdata
+    except ImportError:
+        logger.error("Required dependency 'torchdata' is missing!")
+        logger.error("Please install it with:")
+        logger.error("  pip install torchdata")
+        sys.exit(1)
+
+    try:
         from bondnet.data.dataset import ReactionNetworkDataset
-        from bondnet.model.training_utils import train_model
+        try:
+            from bondnet.model.training_utils import train_model
+        except ImportError:
+            # Fallback if train_model is not in training_utils (e.g. newer bondnet versions)
+            # We might need to implement training loop or import it from somewhere else
+            # For now, we report this as a specific error.
+            logger.error("Could not import 'train_model' from 'bondnet.model.training_utils'.")
+            logger.error("Your BonDNet installation might be different from expected.")
+            raise
+
         from bondnet.model.gated_reaction_network import GatedGCNReactionNetwork
         import torch
         import yaml
