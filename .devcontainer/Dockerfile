@@ -117,9 +117,11 @@ RUN pip install --no-cache-dir torch-geometric
 # torch_scatterなど拡張ライブラリをソースからビルド
 # sm_120 (RTX 5070 Ti) 対応のため、CUDA環境変数を設定してソースからビルド
 # PyTorch Nightly (2.10.0+) はビルド済みホイールが存在しないため、直接ソースからビルド
+# メモリ不足回避のため、ここでも念のため並列数を制限する環境変数を設定
 RUN export FORCE_CUDA=1 && \
     export TORCH_CUDA_ARCH_LIST="9.0;12.0" && \
     export CUDA_HOME=/usr/local/cuda-12.8 && \
+    export MAX_JOBS=4 && \
     echo "Building PyG extensions from source with CUDA support..." && \
     pip install --no-cache-dir --no-build-isolation torch-scatter && \
     pip install --no-cache-dir --no-build-isolation torch-sparse torch-cluster torch-spline-conv
@@ -132,12 +134,30 @@ RUN pip install --no-cache-dir ogb>=1.3.6
 # BonDNetの依存関係として必要
 # ===================================================
 # PyTorch Nightlyと互換性を持たせるため、ソースからビルド
-# sm_120 (RTX 5070 Ti) 対応のため、CUDA環境変数を設定
+# sm_120 (RTX 5070 Ti) 対応のため、パッチを適用して手動ビルド
 RUN export FORCE_CUDA=1 && \
     export TORCH_CUDA_ARCH_LIST="9.0;12.0" && \
     export CUDA_HOME=/usr/local/cuda-12.8 && \
     echo "Building DGL from source with CUDA support..." && \
-    pip install --no-cache-dir git+https://github.com/dmlc/dgl.git
+    # 1. ソースコードを再帰的にクローン
+    git clone --recursive https://github.com/dmlc/dgl.git /tmp/dgl_source && \
+    cd /tmp/dgl_source && \
+    # 2. パッチ適用: 単純にファイルの末尾にCUDA 12.8設定を追記する方式 (echoを使用)
+    echo 'if (CUDA_VERSION VERSION_GREATER_EQUAL "12.8")' >> cmake/modules/CUDA.cmake && \
+    echo '  list(APPEND dgl_known_gpu_archs "120")' >> cmake/modules/CUDA.cmake && \
+    echo '  set(dgl_cuda_arch_ptx "120")' >> cmake/modules/CUDA.cmake && \
+    echo 'endif()' >> cmake/modules/CUDA.cmake && \
+    # 3. C++ライブラリのビルド
+    mkdir build && cd build && \
+    # Releaseビルドを指定し、CUDA_ARCH_BIN="12.0" (sm_120) のみをターゲットにする
+    cmake -DCMAKE_BUILD_TYPE=Release -DUSE_CUDA=ON -DUSE_OPENMP=ON -DCUDA_ARCH_NAME=Manual -DCUDA_ARCH_BIN="12.0" .. && \
+    # 【重要】メモリ不足回避のため、並列数を4に制限 (32GB RAM推奨値)
+    make -j4 && \
+    # 4. Pythonバインディングのインストール
+    cd ../python && \
+    pip install . && \
+    # 5. クリーンアップ
+    cd / && rm -rf /tmp/dgl_source
 
 # ===================================================
 # BonDNet インストール
